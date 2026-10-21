@@ -1,3 +1,7 @@
+#![allow(clippy::uninlined_format_args)]
+// The existing Tandoor client predates Rust's captured-format syntax. Keep this
+// upgrade focused on MCP behavior; migrate those diagnostics separately.
+
 //! # Tandoor MCP Library
 //!
 //! This library provides tools for integrating with Tandoor (a recipe management system)
@@ -11,7 +15,8 @@
 //! ## Server Module
 //!
 //! The [`server`] module implements an MCP server that exposes Tandoor functionality
-//! as standardized tools that AI assistants can use.
+//! as standardized tools that AI assistants can use. The [`http`] module mounts it
+//! as a Streamable HTTP service at `/mcp`, with MCP 2026-07-28 discovery support.
 //!
 //! ## Quick Start
 //!
@@ -30,7 +35,9 @@
 //! ```
 
 pub mod client;
+pub mod http;
 pub mod server;
 
 pub use client::TandoorClient;
+pub use http::mcp_router;
 pub use server::TandoorMcpServer;

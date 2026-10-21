@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+// Each integration-test crate imports this shared module independently, so
+// helpers used by sibling test files appear unused in some test binaries.
+
 use anyhow::Result;
 use mcp_tandoor::TandoorClient;
 use std::process::{Command, Stdio};
@@ -31,12 +35,7 @@ impl TestEnvironment {
             println!("Using token from TANDOOR_AUTH_TOKEN environment variable");
             client.set_token(token.clone());
             let _ = SHARED_TOKEN.set(token);
-            return Ok(Self {
-                base_url,
-                username,
-                password,
-                client,
-            });
+            return Ok(Self { client });
         }
 
         // Last resort: try to authenticate (may fail due to rate limiting)
@@ -52,12 +51,7 @@ impl TestEnvironment {
                 if let Some(token) = client.get_token() {
                     let _ = SHARED_TOKEN.set(token.to_string());
                 }
-                Ok(Self {
-                    base_url,
-                    username,
-                    password,
-                    client,
-                })
+                Ok(Self { client })
             }
             Err(e) => {
                 eprintln!("Authentication failed: {e}");

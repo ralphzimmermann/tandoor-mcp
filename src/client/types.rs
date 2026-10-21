@@ -18,8 +18,45 @@
 //! - [`Recipe`] maps "created_at"/"updated_at" to "created"/"updated" fields
 //! - Many fields are optional to handle varying API response formats
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Tandoor may return a bare user id or a nested user object depending on endpoint/version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UserOrId {
+    Id(i32),
+    User(UserInfo),
+}
+
+impl UserOrId {
+    pub fn id(&self) -> i32 {
+        match self {
+            Self::Id(id) => *id,
+            Self::User(user) => user.id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserInfo {
+    pub id: i32,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+/// Nested recipe payloads on list endpoints are often summaries, not full recipes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeSummary {
+    pub id: i32,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+}
 
 /// OAuth2 authentication token response from Tandoor.
 ///
@@ -84,9 +121,9 @@ pub struct Recipe {
     /// Recipe image URL or path
     #[serde(default)]
     pub image: Option<String>,
-    /// User ID who created this recipe
+    /// User who created this recipe (id or nested user object)
     #[serde(default)]
-    pub created_by: Option<i32>,
+    pub created_by: Option<UserOrId>,
     /// Original source URL if imported
     #[serde(default)]
     pub source_url: Option<String>,
@@ -283,12 +320,21 @@ pub struct StepIngredient {
 pub struct Food {
     pub id: i32,
     pub name: String,
+    #[serde(default)]
     pub plural_name: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
-    pub recipe: Option<i32>,
+    /// Nested recipe id, or omitted/null on slim list payloads.
+    #[serde(default)]
+    pub recipe: Option<serde_json::Value>,
+    #[serde(default)]
     pub food_onhand: bool,
-    pub supermarket_category: Option<i32>,
+    /// Category id or nested object depending on endpoint.
+    #[serde(default)]
+    pub supermarket_category: Option<serde_json::Value>,
+    #[serde(default)]
     pub inherit_fields: Vec<InheritField>,
+    #[serde(default)]
     pub properties: Vec<FoodProperty>,
 }
 
@@ -296,9 +342,13 @@ pub struct Food {
 pub struct Unit {
     pub id: i32,
     pub name: String,
+    #[serde(default)]
     pub plural_name: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub base_unit: Option<String>,
+    #[serde(default, rename = "type")]
     pub type_: Option<String>,
 }
 
@@ -345,33 +395,61 @@ pub struct ShoppingListEntry {
     /// Quantity to purchase
     pub amount: f64,
     /// Display order in the shopping list
+    #[serde(default)]
     pub order: i32,
     /// Whether this item has been purchased
     pub checked: bool,
     /// When this entry was added
+    #[serde(rename = "created_at", alias = "created")]
     pub created: DateTime<Utc>,
     /// When this item was marked as purchased
+    #[serde(rename = "completed_at", alias = "completed", default)]
     pub completed: Option<DateTime<Utc>>,
     /// Optional delay before showing this item
+    #[serde(default)]
     pub delay_until: Option<DateTime<Utc>>,
     /// User who added this entry
-    pub created_by: i32,
+    pub created_by: UserOrId,
     /// User who marked this as completed
-    pub completed_by: Option<i32>,
+    #[serde(default)]
+    pub completed_by: Option<UserOrId>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MealPlan {
     pub id: i32,
     pub title: Option<String>,
-    pub recipe: Option<Recipe>,
-    pub servings: i32,
+    pub recipe: Option<RecipeSummary>,
+    pub servings: f64,
     pub note: Option<String>,
-    pub date: chrono::NaiveDate,
+    /// Legacy single-day field (older Tandoor versions).
+    #[serde(default)]
+    pub date: Option<NaiveDate>,
+    /// Current Tandoor meal-plan window start.
+    #[serde(default)]
+    pub from_date: Option<DateTime<Utc>>,
+    /// Current Tandoor meal-plan window end.
+    #[serde(default)]
+    pub to_date: Option<DateTime<Utc>>,
     pub meal_type: MealType,
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-    pub created_by: i32,
+    #[serde(rename = "created_at", alias = "created", default)]
+    pub created: Option<DateTime<Utc>>,
+    #[serde(rename = "updated_at", alias = "updated", default)]
+    pub updated: Option<DateTime<Utc>>,
+    pub created_by: UserOrId,
+}
+
+impl MealPlan {
+    /// Prefer `from_date` when present; fall back to legacy `date`.
+    pub fn primary_date_label(&self) -> String {
+        if let Some(from) = self.from_date {
+            return from.date_naive().to_string();
+        }
+        if let Some(date) = self.date {
+            return date.to_string();
+        }
+        "unknown".to_string()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -380,20 +458,25 @@ pub struct MealType {
     pub name: String,
     pub order: i32,
     pub color: String,
+    #[serde(default)]
     pub default: bool,
-    pub created_by: i32,
+    pub created_by: UserOrId,
+    #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default)]
+    pub time: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CookLog {
     pub id: i32,
-    pub recipe: Recipe,
-    pub servings: i32,
+    pub recipe: RecipeSummary,
+    pub servings: f64,
     pub rating: Option<i32>,
     pub comment: Option<String>,
+    #[serde(rename = "created_at", alias = "created")]
     pub created: DateTime<Utc>,
-    pub created_by: i32,
+    pub created_by: UserOrId,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -475,8 +558,11 @@ pub struct CreateShoppingListEntryRequest {
 pub struct CreateMealPlanRequest {
     pub recipe: Option<i32>,
     pub title: Option<String>,
-    pub servings: i32,
-    pub date: chrono::NaiveDate,
+    pub servings: f64,
+    /// Meal-plan window start (ISO-8601). Required by current Tandoor.
+    pub from_date: DateTime<Utc>,
+    /// Meal-plan window end (ISO-8601). Defaults to `from_date` when omitted by callers.
+    pub to_date: DateTime<Utc>,
     pub meal_type: i32,
     pub note: Option<String>,
 }
