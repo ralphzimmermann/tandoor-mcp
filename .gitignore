@@ -22,4 +22,8 @@
 # Logs
 *.log
 
+# Local secrets / tunnel config
+.env
+.env.*
+
 tandoor/

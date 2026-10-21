@@ -10,7 +10,6 @@
 //! - **Shopping Lists**: Add items, manage shopping lists, check off items
 //! - **Meal Planning**: Plan meals and add to shopping lists
 //! - **Food & Ingredient Search**: Find foods and ingredients in the database
-//! - **Import Capabilities**: Import recipes from URLs
 //! - **Unit Management**: Get available measurement units
 //! - **Keyword Management**: Get and search recipe keywords
 //!
@@ -20,19 +19,29 @@
 //! to work around Tandoor's strict rate limiting (10 auth requests per day).
 
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     schemars,
     service::RequestContext,
     tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde_json::json;
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
 use crate::client::TandoorClient;
+
+// Preserve the existing text-only tool result format while using rmcp's current name.
+use rmcp::model::ContentBlock as Content;
+
+/// Server-wide guidance returned by both legacy initialization and modern discovery.
+///
+/// The opening paragraph is deliberately self-contained because ChatGPT gives the
+/// first 512 characters of MCP instructions special prominence.
+pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen and may require confirmation. Look up identifiers before writing: use search_recipes before recipe operations, search_foods before food operations, and get_meal_types before create_meal_plan. Dates use YYYY-MM-DD. Never invent recipe, food, unit, or meal-type identifiers. Use recipe tools to search, inspect, and create recipes; shopping tools to view, add, check, or clear entries; meal-plan tools to view, create, or delete plans; pantry tools to inspect suggestions and update availability; and cooking-log tools to read or record cooking history.";
 
 // Parameter structs for tools
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -104,6 +113,7 @@ pub struct AddFromRecipeParams {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct GetShoppingListParams {
+    /// Response layout: `flat` for a single list; other values are reserved.
     #[serde(default = "default_format")]
     pub format: String,
 }
@@ -114,7 +124,8 @@ fn default_format() -> String {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CheckShoppingItemsParams {
-    pub items: Vec<serde_json::Value>, // Can be strings (names) or numbers (IDs)
+    /// Shopping entry names (strings) or entry identifiers (numbers) to check.
+    pub items: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -139,8 +150,10 @@ pub struct UpdatePantryParams {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct GetMealPlansParams {
-    pub from_date: String, // YYYY-MM-DD format
-    pub to_date: String,   // YYYY-MM-DD format
+    /// Inclusive start date in `YYYY-MM-DD` format.
+    pub from_date: String,
+    /// Inclusive end date in `YYYY-MM-DD` format.
+    pub to_date: String,
     #[serde(default)]
     pub meal_type: Option<String>,
 }
@@ -152,7 +165,9 @@ pub struct CreateMealPlanParams {
     #[serde(default)]
     pub title: Option<String>,
     pub servings: i32,
-    pub date: String, // YYYY-MM-DD format
+    /// Meal date in `YYYY-MM-DD` format.
+    pub date: String,
+    /// Numeric Tandoor meal-type identifier; discover it with `get_meal_types`.
     pub meal_type: i32,
     #[serde(default)]
     pub note: Option<String>,
@@ -192,8 +207,10 @@ fn default_servings() -> i32 {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SuggestFromInventoryParams {
+    /// Suggestion strategy. The default is `maximum-use`.
     #[serde(default = "default_mode")]
     pub mode: String,
+    /// Prefer foods expiring within this many days.
     #[serde(default = "default_days_until_expiry")]
     pub days_until_expiry: i32,
 }
@@ -341,6 +358,15 @@ impl TandoorMcpServer {
             return Ok(client);
         }
 
+        // Prefer a reusable token to avoid Tandoor's authentication rate limit.
+        if let Some(auth_storage) = GLOBAL_AUTH.get() {
+            if let Some(token) = auth_storage.lock().await.clone() {
+                client.set_token(token);
+                tracing::info!("Using pre-authenticated Tandoor token");
+                return Ok(client);
+            }
+        }
+
         tracing::info!("=== ensure_authenticated: not authenticated, proceeding with auth ===");
 
         // If no global token, try to authenticate with stored credentials directly
@@ -388,7 +414,14 @@ impl TandoorMcpServer {
     }
 
     // Recipe tools
-    #[tool(description = "Search for recipes with flexible querying")]
+    #[tool(
+        description = "Use this to find recipes by name or text and obtain recipe identifiers. Use get_recipe_details after selecting a result.",
+        annotations(
+            title = "Search recipes",
+            read_only_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn search_recipes(
         &self,
         Parameters(params): Parameters<SearchRecipesParams>,
@@ -456,7 +489,14 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Get comprehensive recipe information including scaled ingredients")]
+    #[tool(
+        description = "Use this to inspect one known recipe, optionally scaling its ingredients for a serving count. Use search_recipes first when the recipe id is unknown.",
+        annotations(
+            title = "Get recipe details",
+            read_only_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn get_recipe_details(
         &self,
         Parameters(params): Parameters<GetRecipeDetailsParams>,
@@ -549,7 +589,15 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Create a new recipe")]
+    #[tool(
+        description = "Use this to create a recipe in the shared Tandoor kitchen. This basic operation stores metadata and instructions but does not create ingredient entries.",
+        annotations(
+            title = "Create recipe",
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = true
+        )
+    )]
     async fn create_recipe(
         &self,
         Parameters(params): Parameters<CreateRecipeParams>,
@@ -635,7 +683,15 @@ impl TandoorMcpServer {
     }
 
     // Shopping list tools
-    #[tool(description = "Add items to shopping list with intelligent consolidation")]
+    #[tool(
+        description = "Use this to add foods or a known recipe's ingredients to the shared shopping list. Use search_foods or search_recipes first when identifiers or names are uncertain.",
+        annotations(
+            title = "Add to shopping list",
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = true
+        )
+    )]
     async fn add_to_shopping_list(
         &self,
         Parameters(params): Parameters<AddToShoppingListParams>,
@@ -743,7 +799,14 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Get current shopping list organized by store section")]
+    #[tool(
+        description = "Use this to read the current shared shopping list and purchase state. Use add_to_shopping_list to add entries or check_shopping_items to mark purchases.",
+        annotations(
+            title = "Get shopping list",
+            read_only_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn get_shopping_list(
         &self,
         Parameters(params): Parameters<GetShoppingListParams>,
@@ -831,7 +894,10 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Search for foods/ingredients with fuzzy name matching")]
+    #[tool(
+        description = "Use this to find Tandoor food records by name before pantry or shopping-list operations. It does not search recipes; use search_recipes for those.",
+        annotations(title = "Search foods", read_only_hint = true, open_world_hint = true)
+    )]
     async fn search_foods(
         &self,
         Parameters(params): Parameters<SearchFoodsParams>,
@@ -897,7 +963,10 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Get all available recipe keywords/tags")]
+    #[tool(
+        description = "Use this to list recipe keywords and tags available in the shared Tandoor kitchen. It does not modify recipe metadata.",
+        annotations(title = "Get keywords", read_only_hint = true, open_world_hint = true)
+    )]
     async fn get_keywords(&self) -> Result<CallToolResult, McpError> {
         tracing::debug!("MCP tool call: get_keywords");
 
@@ -976,7 +1045,10 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Get available measurement units")]
+    #[tool(
+        description = "Use this to list measurement units configured in Tandoor. Use the returned names and identifiers rather than inventing units.",
+        annotations(title = "Get units", read_only_hint = true, open_world_hint = true)
+    )]
     async fn get_units(&self) -> Result<CallToolResult, McpError> {
         tracing::info!("=== MCP tool call: get_units started ===");
 
@@ -1042,7 +1114,14 @@ impl TandoorMcpServer {
     }
 
     // Meal planning tools
-    #[tool(description = "Get meal plans for a date range")]
+    #[tool(
+        description = "Use this to read meal plans over an inclusive YYYY-MM-DD date range. Use create_meal_plan to add a plan.",
+        annotations(
+            title = "Get meal plans",
+            read_only_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn get_meal_plans(
         &self,
         Parameters(params): Parameters<GetMealPlansParams>,
@@ -1080,7 +1159,9 @@ impl TandoorMcpServer {
                     .map(|plan| {
                         json!({
                             "id": plan.id,
-                            "date": plan.date,
+                            "date": plan.primary_date_label(),
+                            "from_date": plan.from_date,
+                            "to_date": plan.to_date,
                             "meal_type": plan.meal_type.name,
                             "recipe_id": plan.recipe.as_ref().map(|r| r.id),
                             "recipe_name": plan.recipe.as_ref().map(|r| &r.name),
@@ -1115,7 +1196,15 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Create a new meal plan")]
+    #[tool(
+        description = "Use this to add a meal plan to the shared kitchen. Use search_recipes and get_meal_types first; never invent recipe or meal-type identifiers.",
+        annotations(
+            title = "Create meal plan",
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = true
+        )
+    )]
     async fn create_meal_plan(
         &self,
         Parameters(params): Parameters<CreateMealPlanParams>,
@@ -1143,12 +1232,19 @@ impl TandoorMcpServer {
                 Some(serde_json::json!({"error": e.to_string()})),
             )
         })?;
+        // Current Tandoor meal plans use from_date/to_date datetimes; noon UTC keeps the calendar day stable.
+        let from_date = date
+            .and_hms_opt(12, 0, 0)
+            .expect("valid noon time")
+            .and_utc();
+        let to_date = from_date;
 
         let request = crate::client::types::CreateMealPlanRequest {
             recipe: params.recipe_id,
             title: params.title,
-            servings: params.servings,
-            date,
+            servings: params.servings as f64,
+            from_date,
+            to_date,
             meal_type: params.meal_type,
             note: params.note,
         };
@@ -1157,7 +1253,9 @@ impl TandoorMcpServer {
             Ok(meal_plan) => {
                 let result = json!({
                     "id": meal_plan.id,
-                    "date": meal_plan.date,
+                    "date": meal_plan.primary_date_label(),
+                    "from_date": meal_plan.from_date,
+                    "to_date": meal_plan.to_date,
                     "meal_type": meal_plan.meal_type.name,
                     "recipe_id": meal_plan.recipe.as_ref().map(|r| r.id),
                     "recipe_name": meal_plan.recipe.as_ref().map(|r| &r.name),
@@ -1186,7 +1284,15 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Delete a meal plan")]
+    #[tool(
+        description = "Use this only to permanently delete a known meal-plan entry. Use get_meal_plans first when the entry id is unknown.",
+        annotations(
+            title = "Delete meal plan",
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn delete_meal_plan(
         &self,
         Parameters(params): Parameters<DeleteMealPlanParams>,
@@ -1235,7 +1341,14 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Get available meal types")]
+    #[tool(
+        description = "Use this to list configured meal types and their numeric identifiers before create_meal_plan.",
+        annotations(
+            title = "Get meal types",
+            read_only_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn get_meal_types(&self) -> Result<CallToolResult, McpError> {
         // Ensure we're authenticated before making API calls
         let client = match self.ensure_authenticated().await {
@@ -1292,7 +1405,16 @@ impl TandoorMcpServer {
     }
 
     // Shopping list management tools
-    #[tool(description = "Mark shopping list items as checked/purchased")]
+    #[tool(
+        description = "Use this to mark known shopping-list entries as checked or purchased. Use get_shopping_list first when entry names or ids are unknown.",
+        annotations(
+            title = "Check shopping items",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn check_shopping_items(
         &self,
         Parameters(params): Parameters<CheckShoppingItemsParams>,
@@ -1404,7 +1526,15 @@ impl TandoorMcpServer {
         )]))
     }
 
-    #[tool(description = "Clear checked items from shopping list and update pantry")]
+    #[tool(
+        description = "Use this only to remove all checked shopping entries and update pantry availability. Inspect the list with get_shopping_list first.",
+        annotations(
+            title = "Clear checked shopping items",
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn clear_shopping_list(&self) -> Result<CallToolResult, McpError> {
         // Ensure we're authenticated before making API calls
         let client = match self.ensure_authenticated().await {
@@ -1490,7 +1620,16 @@ impl TandoorMcpServer {
     }
 
     // Inventory management tools
-    #[tool(description = "Update pantry inventory status")]
+    #[tool(
+        description = "Use this to set food availability or amount in the shared pantry. Use search_foods first when a food name is uncertain.",
+        annotations(
+            title = "Update pantry",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn update_pantry(
         &self,
         Parameters(params): Parameters<UpdatePantryParams>,
@@ -1570,7 +1709,14 @@ impl TandoorMcpServer {
     }
 
     // Recipe history tools
-    #[tool(description = "Get cooking history")]
+    #[tool(
+        description = "Use this to read recent cooking history, optionally for one known recipe. Use search_recipes first when the recipe id is unknown.",
+        annotations(
+            title = "Get cooking history",
+            read_only_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn get_cook_log(
         &self,
         Parameters(params): Parameters<GetCookLogParams>,
@@ -1637,7 +1783,15 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Log a cooked recipe")]
+    #[tool(
+        description = "Use this to append a cooking-history entry for a known recipe in the shared kitchen. Use search_recipes first when its id is unknown.",
+        annotations(
+            title = "Log cooked recipe",
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = true
+        )
+    )]
     async fn log_cooked_recipe(
         &self,
         Parameters(params): Parameters<LogCookedRecipeParams>,
@@ -1697,7 +1851,14 @@ impl TandoorMcpServer {
         }
     }
 
-    #[tool(description = "Get recipe suggestions based on current inventory")]
+    #[tool(
+        description = "Use this to suggest recipes based on foods currently marked available in the pantry. It reads inventory but does not modify it.",
+        annotations(
+            title = "Suggest from inventory",
+            read_only_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn suggest_from_inventory(
         &self,
         Parameters(params): Parameters<SuggestFromInventoryParams>,
@@ -1866,24 +2027,27 @@ impl TandoorMcpServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for TandoorMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides comprehensive tools for managing recipes, shopping lists, meal plans, and food inventory through the Tandoor recipe management system. Available tools include: recipe search and management, shopping list operations, meal planning, inventory tracking, cooking history, and recipe suggestions based on available ingredients.".to_string()),
-        }
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("tandoor", env!("CARGO_PKG_VERSION")))
+            .with_instructions(SERVER_INSTRUCTIONS)
     }
 
-    async fn initialize(
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(&[ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25])
+    }
+
+    fn discover(
         &self,
-        _request: InitializeRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> Result<InitializeResult, McpError> {
-        Ok(self.get_info())
+    ) -> impl Future<Output = Result<DiscoverResult, McpError>> + Send + '_ {
+        std::future::ready(Ok(DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            self.get_info(),
+        )
+        .with_ttl_ms(300_000)
+        .with_cache_scope(CacheScope::Public)))
     }
 }

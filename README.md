@@ -36,6 +36,10 @@ rustup is recommended:
 cargo run
 ```
 
+The MCP Streamable HTTP endpoint is `http://127.0.0.1:3001/mcp`. See
+[MCP transport and ChatGPT](docs/mcp.md) for discovery checks, deployment
+security, and ChatGPT setup.
+
 ## Tandoor Configuration
 
 ⚠️ **IMPORTANT**: Tandoor uses a multi-tenant permission system that requires specific setup for API access to work properly. Without proper space and group configuration, you'll get permission errors even with valid authentication.
@@ -147,7 +151,9 @@ You should get a JSON response with keywords
 | `TANDOOR_BASE_URL` | Full URL to your Tandoor instance   | `http://localhost:8080` |
 | `TANDOOR_USERNAME` | Username for Tandoor authentication | `admin`                 |
 | `TANDOOR_PASSWORD` | Password for Tandoor authentication | `admin`                 |
+| `TANDOOR_AUTH_TOKEN` | Existing token that avoids authentication rate limits | unset |
 | `BIND_ADDR`        | Address and port for the MCP server | `127.0.0.1:3001`        |
+| `MCP_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call `/mcp` | unset |
 
 ### Runtime Configuration
 
@@ -169,7 +175,6 @@ The MCP server provides the following tools:
 - `search_recipes` - Search for recipes with flexible querying
 - `get_recipe_details` - Get comprehensive recipe information with scaled ingredients
 - `create_recipe` - Create a new recipe
-- `import_recipe_from_url` - Import a recipe from an external URL
 
 ### Shopping Lists
 

@@ -10,6 +10,7 @@
 //! - `TANDOOR_USERNAME`: Tandoor username for authentication (default: admin)  
 //! - `TANDOOR_PASSWORD`: Tandoor password for authentication (default: admin)
 //! - `BIND_ADDR`: Address to bind the MCP server (default: 127.0.0.1:3001)
+//! - `MCP_ALLOWED_ORIGINS`: Comma-separated browser origins allowed to call `/mcp`
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
 //!
 //! ## Usage
@@ -21,9 +22,8 @@
 //! cargo run
 //! ```
 
-use mcp_tandoor::server::TandoorMcpServer;
-use rmcp::transport::sse_server::{SseServer, SseServerConfig};
-use std::env;
+use mcp_tandoor::{mcp_router, server::TandoorMcpServer};
+use std::{env, net::SocketAddr};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -46,6 +46,13 @@ async fn main() -> anyhow::Result<()> {
     let password = env::var("TANDOOR_PASSWORD").unwrap_or_else(|_| "admin".to_string());
 
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
+    let allowed_origins = env::var("MCP_ALLOWED_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(str::to_owned)
+        .collect();
 
     // Test authentication and validate token
     tracing::info!("Validating Tandoor credentials...");
@@ -55,10 +62,16 @@ async fn main() -> anyhow::Result<()> {
         password.clone(),
     );
 
-    if let Err(e) = test_server
-        .authenticate(username.clone(), password.clone())
-        .await
-    {
+    let authentication_result = if let Ok(token) = env::var("TANDOOR_AUTH_TOKEN") {
+        tracing::info!("Using TANDOOR_AUTH_TOKEN");
+        test_server.set_global_auth_token(token).await
+    } else {
+        test_server
+            .authenticate(username.clone(), password.clone())
+            .await
+    };
+
+    if let Err(e) = authentication_result {
         tracing::error!("Authentication failed: {}", e);
         tracing::error!("Please verify:");
         tracing::error!("  - TANDOOR_BASE_URL is correct: {}", base_url);
@@ -87,39 +100,23 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Successfully authenticated and validated API access with Tandoor");
 
-    // Create server configuration and start SSE server
-    let config = SseServerConfig {
-        bind: bind_addr.parse()?,
-        sse_path: "/sse".to_string(),
-        post_path: "/message".to_string(),
-        ct: tokio_util::sync::CancellationToken::new(),
-        sse_keep_alive: None,
-    };
+    // Streamable HTTP uses one endpoint for discovery, tool listing, and calls.
+    let bind: SocketAddr = bind_addr.parse()?;
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    let local_addr = listener.local_addr()?;
+    let app = mcp_router(test_server, allowed_origins);
 
-    tracing::info!("Tandoor MCP Server listening on {}", config.bind);
-
-    // serve_with_config handles binding, axum server setup, and graceful shutdown internally
-    let sse_server = SseServer::serve_with_config(config).await?;
-
-    // Add the Tandoor service with authentication credentials
-    let base_url_clone = base_url.clone();
-    let username_clone = username.clone();
-    let password_clone = password.clone();
-
-    let ct = sse_server.with_service(move || {
-        TandoorMcpServer::new_with_credentials(
-            base_url_clone.clone(),
-            username_clone.clone(),
-            password_clone.clone(),
-        )
-    });
-
-    tracing::info!("Tandoor MCP Server started successfully");
-
-    // Wait for Ctrl+C
-    tokio::signal::ctrl_c().await?;
-    tracing::info!("Shutting down...");
-    ct.cancel();
+    tracing::info!("Tandoor MCP Server listening on http://{local_addr}/mcp");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    if let Err(error) = tokio::signal::ctrl_c().await {
+        tracing::error!("Failed to listen for shutdown signal: {error}");
+    }
+    tracing::info!("Shutting down...");
 }
