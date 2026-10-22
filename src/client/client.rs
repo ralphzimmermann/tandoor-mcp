@@ -339,6 +339,17 @@ impl TandoorClient {
         Ok(recipe)
     }
 
+    /// Every recipe visible in the active Tandoor space, following pagination.
+    pub async fn list_all_recipes(&self) -> Result<Vec<Recipe>> {
+        Ok(self
+            .get_all_paginated(
+                format!("{}/api/recipe/?page_size=100", self.base_url),
+                "recipes",
+            )
+            .await?
+            .results)
+    }
+
     pub async fn create_recipe(&self, request: CreateRecipeRequest) -> Result<Recipe> {
         let auth_header = self.get_auth_header()?;
         let url = format!("{}/api/recipe/", self.base_url);
@@ -496,6 +507,50 @@ impl TandoorClient {
         }
         let food = response.json().await?;
         Ok(food)
+    }
+
+    /// Set or clear the recipe linked globally from a Food record.
+    pub async fn set_food_recipe(&self, food_id: i32, recipe: Option<NamedRef>) -> Result<Food> {
+        let recipe = recipe
+            .map(|recipe| serde_json::json!({"id": recipe.id, "name": recipe.name}))
+            .unwrap_or(serde_json::Value::Null);
+        let updated = self
+            .api_update(
+                "food",
+                i64::from(food_id),
+                serde_json::json!({"recipe": recipe}),
+            )
+            .await?;
+        Ok(serde_json::from_value(updated)?)
+    }
+
+    /// Locate the preference record belonging to the authenticated account.
+    pub async fn get_user_preference(&self) -> Result<UserPreference> {
+        let preferences = self.api_list_all("user-preference").await?;
+        anyhow::ensure!(
+            preferences.len() == 1,
+            "Expected one authenticated user preference, found {}",
+            preferences.len()
+        );
+        Ok(serde_json::from_value(
+            preferences.into_iter().next().expect("length checked"),
+        )?)
+    }
+
+    /// Update only related-recipe meal-plan inclusion for the authenticated account.
+    pub async fn set_related_recipe_mealplan_inclusion(
+        &self,
+        enabled: bool,
+    ) -> Result<UserPreference> {
+        let preference = self.get_user_preference().await?;
+        let updated = self
+            .api_update(
+                "user-preference",
+                i64::from(preference.user.id()),
+                serde_json::json!({"mealplan_autoinclude_related": enabled}),
+            )
+            .await?;
+        Ok(serde_json::from_value(updated)?)
     }
 
     /// Every food in the space, following pagination.
@@ -1531,6 +1586,12 @@ impl TandoorClient {
         Ok(step)
     }
 
+    /// Set or clear a recipe embedded in one existing step.
+    pub async fn set_step_recipe(&self, step_id: i32, recipe_id: Option<i32>) -> Result<Step> {
+        self.update_step(step_id, serde_json::json!({"step_recipe": recipe_id}))
+            .await
+    }
+
     pub async fn update_recipe(&self, id: i32, body: serde_json::Value) -> Result<Recipe> {
         let auth_header = self.get_auth_header()?;
         let url = format!("{}/api/recipe/{}/", self.base_url, id);
@@ -2009,6 +2070,53 @@ mod tests {
         net::TcpListener,
     };
 
+    async fn test_server(
+        response_bodies: Vec<serde_json::Value>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for body in response_bodies {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0u8; 4096];
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk[..read]);
+                    let Some(header_end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let line = line.to_ascii_lowercase();
+                            line.strip_prefix("content-length:")
+                                .map(str::trim)
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= header_end + 4 + content_length {
+                        break;
+                    }
+                }
+                requests.push(String::from_utf8(bytes).unwrap());
+                let body = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        (format!("http://{address}"), handle)
+    }
+
     #[tokio::test]
     async fn get_keywords_follows_all_pages_on_the_tandoor_origin() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2064,5 +2172,54 @@ mod tests {
         assert!(keywords.next.is_none());
         assert!(keywords.previous.is_none());
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn relation_writes_use_expected_tandoor_payloads() {
+        let food = serde_json::json!({
+            "id": 5,
+            "name": "Sauce",
+            "recipe": {"id": 12, "name": "Sauce"},
+            "food_onhand": false
+        });
+        let preference = serde_json::json!({
+            "user": {"id": 7, "username": "cook"},
+            "mealplan_autoinclude_related": true
+        });
+        let (url, requests) = test_server(vec![
+            food,
+            serde_json::json!({
+                "count": 1,
+                "next": null,
+                "previous": null,
+                "results": [preference.clone()]
+            }),
+            preference,
+        ])
+        .await;
+        let mut client = TandoorClient::new(url);
+        client.set_token("test-token".to_string());
+
+        client
+            .set_food_recipe(
+                5,
+                Some(NamedRef {
+                    id: 12,
+                    name: "Sauce".to_string(),
+                }),
+            )
+            .await
+            .unwrap();
+        client
+            .set_related_recipe_mealplan_inclusion(true)
+            .await
+            .unwrap();
+
+        let requests = requests.await.unwrap();
+        assert!(requests[0].starts_with("PATCH /api/food/5/ "));
+        assert!(requests[0].contains(r#""recipe":{"id":12,"name":"Sauce"}"#));
+        assert!(requests[1].starts_with("GET /api/user-preference/?page_size=100 "));
+        assert!(requests[2].starts_with("PATCH /api/user-preference/7/ "));
+        assert!(requests[2].contains(r#""mealplan_autoinclude_related":true"#));
     }
 }

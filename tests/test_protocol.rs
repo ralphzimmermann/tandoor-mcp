@@ -196,6 +196,13 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
         "create_recipe",
         "import_recipe_from_url",
         "update_recipe",
+        "find_unlinked_recipe_ingredients",
+        "link_step_recipe",
+        "unlink_step_recipe",
+        "link_food_recipe",
+        "unlink_food_recipe",
+        "add_ingredient_header",
+        "set_related_recipe_mealplan_inclusion",
         "set_recipe_image",
         "remove_recipe_image",
         "delete_recipe",
@@ -276,6 +283,13 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     assert_eq!(annotation("update_pantry")["idempotentHint"], true);
     assert_eq!(annotation("merge_foods")["destructiveHint"], true);
     assert_eq!(annotation("get_recipe_books")["readOnlyHint"], true);
+    assert_eq!(
+        annotation("find_unlinked_recipe_ingredients")["readOnlyHint"],
+        true
+    );
+    assert_eq!(annotation("link_food_recipe")["destructiveHint"], false);
+    assert_eq!(annotation("unlink_food_recipe")["destructiveHint"], true);
+    assert_eq!(annotation("add_ingredient_header")["idempotentHint"], false);
     let gallery = first_tools
         .iter()
         .find(|tool| tool["name"] == "get_recipe_gallery")

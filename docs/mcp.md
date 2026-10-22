@@ -110,10 +110,12 @@ Every tool needs an action-oriented description and annotations:
 Update the server instructions when a new tool introduces a required lookup or
 ordering relationship. Keep the first 512 characters self-contained.
 
-The server currently exposes 57 tools. In addition to the original recipe,
+The server currently exposes 64 tools. In addition to the original recipe,
 shopping, pantry, meal-plan, metadata, and cooking-log operations, it supports:
 
 - targeted recipe and ingredient edits, import, deletion, and photos;
+- discovery and management of local step-recipe and global food-recipe links;
+- positioned ingredient section headers and related-recipe meal-plan inclusion;
 - recipe-book membership;
 - named shopping lists and recipe/meal-plan shopping groups;
 - supermarkets, aisle ordering, and food categories;
@@ -124,6 +126,37 @@ Protocol tests compare the complete set of names rather than only a count.
 Meal-plan shopping creates a `shopping-list-recipe` group for each plan and
 uses Tandoor's bulk-entry action, preserving the meal-plan link for later
 rescaling and grouped removal.
+
+## Recipe relation cleanup
+
+`find_unlinked_recipe_ingredients` scans selected parent recipe IDs, or the
+whole kitchen when omitted. It returns unlinked ingredients whose trimmed,
+case-insensitive food name exactly matches a recipe name. Duplicate recipe
+names are reported as ambiguous and never selected automatically.
+
+For each candidate, the user chooses one relationship:
+
+- `link_step_recipe` embeds the related recipe in one specific parent step.
+  This is local to that parent recipe.
+- `link_food_recipe` sets `Food.recipe`. This is global: every ingredient
+  occurrence using that Food displays the recipe link.
+
+The matching unlink tools clear only the relationship; they do not delete
+recipes, foods, steps, or ingredients. Link tools refuse to replace a different
+existing relationship, so callers must explicitly unlink first.
+
+`get_recipe_details` exposes stable `step_id`, `ingredient_id`, and `food_id`
+values together with existing `step_recipe` and `food_recipe` data. Use those
+IDs for writes rather than display-order step numbers.
+
+`add_ingredient_header` inserts a non-food section heading into one step.
+`before_ingredient_id` positions it before an existing ingredient; omitting the
+field appends it. Existing ingredients are sent back by ID and order only, so
+Tandoor preserves their amounts, units, notes, and flags.
+
+`set_related_recipe_mealplan_inclusion` updates only the authenticated account's
+`mealplan_autoinclude_related` preference. It is account-wide, not specific to
+one recipe.
 
 ## Tandoor API shape notes
 
@@ -141,6 +174,7 @@ accept both shapes:
 - Shopping entries embed a slim food object and may omit creator/timestamp
   fields.
 - Recipe ingredients may have no food when they represent a section header.
+- Food recipe references may be a bare ID or a nested recipe summary.
 - Supermarket categories may be nested objects rather than integer ids.
 
 See `tests/test_api_shapes.rs` for fixtures.

@@ -58,6 +58,30 @@ pub struct RecipeSummary {
     pub image: Option<String>,
 }
 
+/// Tandoor returns recipe foreign keys as either a bare id or a nested summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RecipeOrId {
+    Id(i32),
+    Recipe(RecipeSummary),
+}
+
+impl RecipeOrId {
+    pub fn id(&self) -> i32 {
+        match self {
+            Self::Id(id) => *id,
+            Self::Recipe(recipe) => recipe.id,
+        }
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Id(_) => None,
+            Self::Recipe(recipe) => Some(&recipe.name),
+        }
+    }
+}
+
 /// OAuth2 authentication token response from Tandoor.
 ///
 /// Contains the Bearer token used for authenticating subsequent API requests.
@@ -325,9 +349,9 @@ pub struct Food {
     pub plural_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    /// Nested recipe id, or omitted/null on slim list payloads.
+    /// Recipe represented as an id or nested summary, depending on endpoint.
     #[serde(default)]
-    pub recipe: Option<serde_json::Value>,
+    pub recipe: Option<RecipeOrId>,
     #[serde(default)]
     pub food_onhand: bool,
     /// Whether a configured substitute is currently on hand.
@@ -354,6 +378,13 @@ pub struct Unit {
     pub base_unit: Option<String>,
     #[serde(default, rename = "type")]
     pub type_: Option<String>,
+}
+
+/// Preference record for the authenticated Tandoor account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPreference {
+    pub user: UserOrId,
+    pub mealplan_autoinclude_related: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

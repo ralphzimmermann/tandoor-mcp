@@ -45,7 +45,7 @@ use rmcp::model::ContentBlock as Content;
 ///
 /// The opening paragraph is deliberately self-contained because ChatGPT gives the
 /// first 512 characters of MCP instructions special prominence.
-pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. For other multi-recipe photo requests, call get_recipe_gallery. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Image imports accept only public HTTPS images up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
+pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. For other multi-recipe photo requests, call get_recipe_gallery. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Image imports accept only public HTTPS images up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
 
 // Parameter structs for tools
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -674,12 +674,27 @@ fn ordered_steps(steps: &[crate::client::types::Step]) -> Vec<&crate::client::ty
     ordered
 }
 
-fn ingredient_view(ing: &crate::client::types::StepIngredient, scale: f64) -> serde_json::Value {
+fn ingredient_view(
+    ing: &crate::client::types::StepIngredient,
+    scale: f64,
+    client: &TandoorClient,
+) -> serde_json::Value {
     if ing.is_header {
-        return json!({"header": ing.note.clone().unwrap_or_default()});
+        return json!({
+            "ingredient_id": ing.id,
+            "header": ing.note.clone().unwrap_or_default()
+        });
     }
+    let food = ing.food.as_ref();
     json!({
+        "ingredient_id": ing.id,
+        "food_id": food.map(|food| food.id),
         "food": ing.food_name(),
+        "food_recipe": food.and_then(|food| food.recipe.as_ref()).map(|recipe| json!({
+            "id": recipe.id(),
+            "name": recipe.name(),
+            "recipe_url": client.recipe_url(recipe.id())
+        })),
         "amount": if ing.no_amount { None } else { Some(ing.amount * scale) },
         "unit": ing.unit.as_ref().map(|u| &u.name),
         "note": ing.note,
@@ -689,22 +704,172 @@ fn ingredient_view(ing: &crate::client::types::StepIngredient, scale: f64) -> se
 }
 
 /// Per-step view: each step with its own ingredients.
-fn steps_view(steps: &[crate::client::types::Step], scale: f64) -> Vec<serde_json::Value> {
+fn steps_view(
+    steps: &[crate::client::types::Step],
+    scale: f64,
+    client: &TandoorClient,
+) -> Vec<serde_json::Value> {
     ordered_steps(steps)
         .into_iter()
         .enumerate()
         .map(|(i, step)| {
             let mut ings: Vec<_> = step.ingredients.iter().collect();
             ings.sort_by_key(|ing| (ing.order, ing.id));
+            let linked_name = step
+                .step_recipe_data
+                .as_ref()
+                .and_then(|data| data.get("name"))
+                .and_then(serde_json::Value::as_str);
             json!({
+                "step_id": step.id,
                 "step_number": i + 1,
                 "name": step.name,
                 "instruction": step.instruction,
                 "time": step.time,
-                "ingredients": ings.into_iter().map(|ing| ingredient_view(ing, scale)).collect::<Vec<_>>()
+                "step_recipe": step.step_recipe.map(|id| json!({
+                    "id": id,
+                    "name": linked_name,
+                    "recipe_url": client.recipe_url(id)
+                })),
+                "ingredients": ings.into_iter()
+                    .map(|ing| ingredient_view(ing, scale, client))
+                    .collect::<Vec<_>>()
             })
         })
         .collect()
+}
+
+fn normalized_relation_name(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+fn build_header_patch(
+    step: &crate::client::types::Step,
+    header: &str,
+    before_ingredient_id: Option<i32>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut ingredients: Vec<_> = step.ingredients.iter().collect();
+    ingredients.sort_by_key(|ingredient| (ingredient.order, ingredient.id));
+    let insert_at = match before_ingredient_id {
+        Some(id) => ingredients
+            .iter()
+            .position(|ingredient| ingredient.id == id)
+            .ok_or_else(|| {
+                format!(
+                    "before_ingredient_id {id} does not belong to step {}",
+                    step.id
+                )
+            })?,
+        None => ingredients.len(),
+    };
+    let mut patch: Vec<_> = ingredients
+        .iter()
+        .enumerate()
+        .map(|(index, ingredient)| json!({"id": ingredient.id, "order": index}))
+        .collect();
+    patch.insert(
+        insert_at,
+        json!({
+            "food": null,
+            "unit": null,
+            "amount": "0",
+            "note": header,
+            "order": insert_at,
+            "is_header": true,
+            "no_amount": true
+        }),
+    );
+    for (index, ingredient) in patch.iter_mut().enumerate() {
+        ingredient["order"] = json!(index);
+    }
+    Ok(patch)
+}
+
+fn find_relation_candidates(
+    recipes: &[crate::client::types::Recipe],
+    requested_parent_ids: Option<&[i32]>,
+    client: &TandoorClient,
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let mut by_name: std::collections::HashMap<String, Vec<&crate::client::types::Recipe>> =
+        std::collections::HashMap::new();
+    for recipe in recipes {
+        by_name
+            .entry(normalized_relation_name(&recipe.name))
+            .or_default()
+            .push(recipe);
+    }
+
+    let mut candidates = Vec::new();
+    let mut ambiguous = Vec::new();
+    for parent in recipes {
+        if requested_parent_ids.is_some_and(|ids| !ids.contains(&parent.id)) {
+            continue;
+        }
+        for (step_index, step) in ordered_steps(&parent.steps).into_iter().enumerate() {
+            if step.step_recipe.is_some() {
+                continue;
+            }
+            let mut ingredients: Vec<_> = step.ingredients.iter().collect();
+            ingredients.sort_by_key(|ingredient| (ingredient.order, ingredient.id));
+            for ingredient in ingredients {
+                let Some(food) = ingredient.food.as_ref() else {
+                    continue;
+                };
+                if food.recipe.is_some() {
+                    continue;
+                }
+                let Some(matches) = by_name.get(&normalized_relation_name(&food.name)) else {
+                    continue;
+                };
+                let matches: Vec<_> = matches
+                    .iter()
+                    .copied()
+                    .filter(|target| target.id != parent.id)
+                    .collect();
+                if matches.is_empty() {
+                    continue;
+                }
+                let source = json!({
+                    "parent_recipe": {
+                        "id": parent.id,
+                        "name": parent.name,
+                        "recipe_url": client.recipe_url(parent.id)
+                    },
+                    "step_id": step.id,
+                    "step_number": step_index + 1,
+                    "ingredient_id": ingredient.id,
+                    "food_id": food.id,
+                    "food": food.name
+                });
+                if matches.len() > 1 {
+                    ambiguous.push(json!({
+                        "source": source,
+                        "reason": "Multiple recipes have the exact same normalized name",
+                        "matching_recipes": matches.into_iter().map(|target| json!({
+                            "id": target.id,
+                            "name": target.name,
+                            "recipe_url": client.recipe_url(target.id)
+                        })).collect::<Vec<_>>()
+                    }));
+                } else {
+                    let target = matches[0];
+                    candidates.push(json!({
+                        "source": source,
+                        "proposed_recipe": {
+                            "id": target.id,
+                            "name": target.name,
+                            "recipe_url": client.recipe_url(target.id)
+                        },
+                        "choices": {
+                            "step_embed": "Local to this parent step; use link_step_recipe",
+                            "food_link": "Global to every use of this Food record; use link_food_recipe"
+                        }
+                    }));
+                }
+            }
+        }
+    }
+    (candidates, ambiguous)
 }
 
 /// Converts step/ingredient input from tool params into the nested request shape
@@ -1542,6 +1707,52 @@ pub struct UpdateRecipeParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FindUnlinkedRecipeIngredientsParams {
+    /// Limit the audit to these parent recipes. Omit to scan the whole kitchen.
+    #[serde(default)]
+    pub recipe_ids: Option<Vec<i32>>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct LinkStepRecipeParams {
+    pub parent_recipe_id: i32,
+    pub step_id: i32,
+    pub linked_recipe_id: i32,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UnlinkStepRecipeParams {
+    pub parent_recipe_id: i32,
+    pub step_id: i32,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct LinkFoodRecipeParams {
+    pub food_id: i32,
+    pub linked_recipe_id: i32,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UnlinkFoodRecipeParams {
+    pub food_id: i32,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AddIngredientHeaderParams {
+    pub parent_recipe_id: i32,
+    pub step_id: i32,
+    pub header: String,
+    /// Insert before this stable ingredient id. Omit to append.
+    #[serde(default)]
+    pub before_ingredient_id: Option<i32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SetRelatedRecipeMealplanInclusionParams {
+    pub enabled: bool,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DeleteRecipeParams {
     pub id: i32,
 }
@@ -2358,7 +2569,7 @@ impl TandoorMcpServer {
                     1.0
                 };
 
-                let steps = steps_view(&recipe.steps, scaling_factor);
+                let steps = steps_view(&recipe.steps, scaling_factor, &client);
 
                 // Full ingredient list across all steps, each tagged with its step
                 let ingredients: Vec<serde_json::Value> = steps
@@ -4766,11 +4977,348 @@ impl TandoorMcpServer {
                 "working_time": recipe.working_time,
                 "waiting_time": recipe.waiting_time,
                 "keywords": recipe.keywords.into_iter().map(|k| k.name).collect::<Vec<_>>(),
-                "steps": steps_view(&recipe.steps, 1.0),
+                "steps": steps_view(&recipe.steps, 1.0, &client),
                 "updated": recipe.updated
             }))
             .unwrap(),
         )]))
+    }
+
+    #[tool(
+        description = "Find exact-name recipe-as-ingredient cleanup candidates. This is read-only. Each candidate can become either a local step embed with link_step_recipe or a global Food link with link_food_recipe. Duplicate recipe names are reported as ambiguous and never selected automatically.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn find_unlinked_recipe_ingredients(
+        &self,
+        Parameters(params): Parameters<FindUnlinkedRecipeIngredientsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let client = auth_or_return!(self);
+        let recipes = match client.list_all_recipes().await {
+            Ok(recipes) => recipes,
+            Err(e) => return tool_err("Failed to scan recipes", e),
+        };
+        if let Some(ids) = params.recipe_ids.as_deref() {
+            let missing: Vec<_> = ids
+                .iter()
+                .filter(|id| !recipes.iter().any(|recipe| recipe.id == **id))
+                .copied()
+                .collect();
+            if !missing.is_empty() {
+                return tool_err(
+                    "Unknown parent recipe ids",
+                    format!("Recipes not found: {missing:?}"),
+                );
+            }
+        }
+        let (candidates, ambiguous) =
+            find_relation_candidates(&recipes, params.recipe_ids.as_deref(), &client);
+        tool_ok(json!({
+            "candidate_count": candidates.len(),
+            "ambiguous_count": ambiguous.len(),
+            "candidates": candidates,
+            "ambiguous": ambiguous,
+            "matching": "trimmed, case-insensitive exact recipe/food name",
+            "next_step": "Explain that step embeds are local while Food links are global, then ask which relation type to apply."
+        }))
+    }
+
+    #[tool(
+        description = "Link a recipe into one existing parent step. This relation is local to that parent recipe. Refuses to replace a different existing relation; unlink it explicitly first.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn link_step_recipe(
+        &self,
+        Parameters(params): Parameters<LinkStepRecipeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if params.parent_recipe_id == params.linked_recipe_id {
+            return tool_err("Invalid recipe relation", "A recipe cannot link to itself");
+        }
+        let client = auth_or_return!(self);
+        let parent = match client.get_recipe(params.parent_recipe_id).await {
+            Ok(recipe) => recipe,
+            Err(e) => return tool_err("Parent recipe not found", e),
+        };
+        let target = match client.get_recipe(params.linked_recipe_id).await {
+            Ok(recipe) => recipe,
+            Err(e) => return tool_err("Linked recipe not found", e),
+        };
+        let Some(step) = parent.steps.iter().find(|step| step.id == params.step_id) else {
+            return tool_err(
+                "Step does not belong to parent recipe",
+                format!(
+                    "Recipe {} has no step {}",
+                    params.parent_recipe_id, params.step_id
+                ),
+            );
+        };
+        if step.step_recipe == Some(target.id) {
+            return tool_ok(json!({
+                "status": "already_linked",
+                "parent_recipe_id": parent.id,
+                "step_id": step.id,
+                "linked_recipe_id": target.id,
+                "scope": "local_step"
+            }));
+        }
+        if let Some(existing) = step.step_recipe {
+            return tool_err(
+                "Step already links a different recipe",
+                format!("Existing linked recipe is {existing}; unlink it first"),
+            );
+        }
+        if let Err(e) = client.set_step_recipe(step.id, Some(target.id)).await {
+            return tool_err("Failed to link step recipe", e);
+        }
+        tool_ok(json!({
+            "status": "linked",
+            "parent_recipe": {"id": parent.id, "name": parent.name},
+            "step_id": step.id,
+            "linked_recipe": {
+                "id": target.id,
+                "name": target.name,
+                "recipe_url": client.recipe_url(target.id)
+            },
+            "scope": "local_step"
+        }))
+    }
+
+    #[tool(
+        description = "Remove a recipe relation from one parent step. This is destructive but idempotent and does not delete either recipe.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn unlink_step_recipe(
+        &self,
+        Parameters(params): Parameters<UnlinkStepRecipeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let client = auth_or_return!(self);
+        let parent = match client.get_recipe(params.parent_recipe_id).await {
+            Ok(recipe) => recipe,
+            Err(e) => return tool_err("Parent recipe not found", e),
+        };
+        let Some(step) = parent.steps.iter().find(|step| step.id == params.step_id) else {
+            return tool_err(
+                "Step does not belong to parent recipe",
+                format!(
+                    "Recipe {} has no step {}",
+                    params.parent_recipe_id, params.step_id
+                ),
+            );
+        };
+        if step.step_recipe.is_none() {
+            return tool_ok(json!({"status": "already_unlinked", "step_id": step.id}));
+        }
+        if let Err(e) = client.set_step_recipe(step.id, None).await {
+            return tool_err("Failed to unlink step recipe", e);
+        }
+        tool_ok(json!({
+            "status": "unlinked",
+            "parent_recipe_id": parent.id,
+            "step_id": step.id
+        }))
+    }
+
+    #[tool(
+        description = "Link a Food record to a recipe. This is a GLOBAL relation: every ingredient occurrence using this Food displays the recipe link. Refuses to replace a different existing relation.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn link_food_recipe(
+        &self,
+        Parameters(params): Parameters<LinkFoodRecipeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let client = auth_or_return!(self);
+        let food = match client.get_food(params.food_id).await {
+            Ok(food) => food,
+            Err(e) => return tool_err("Food not found", e),
+        };
+        let target = match client.get_recipe(params.linked_recipe_id).await {
+            Ok(recipe) => recipe,
+            Err(e) => return tool_err("Linked recipe not found", e),
+        };
+        if food.recipe.as_ref().map(|recipe| recipe.id()) == Some(target.id) {
+            return tool_ok(json!({
+                "status": "already_linked",
+                "food_id": food.id,
+                "linked_recipe_id": target.id,
+                "scope": "global_food"
+            }));
+        }
+        if let Some(existing) = food.recipe.as_ref() {
+            return tool_err(
+                "Food already links a different recipe",
+                format!(
+                    "Existing linked recipe is {}; unlink it first",
+                    existing.id()
+                ),
+            );
+        }
+        if let Err(e) = client
+            .set_food_recipe(
+                food.id,
+                Some(crate::client::types::NamedRef {
+                    id: target.id,
+                    name: target.name.clone(),
+                }),
+            )
+            .await
+        {
+            return tool_err("Failed to link food recipe", e);
+        }
+        tool_ok(json!({
+            "status": "linked",
+            "food": {"id": food.id, "name": food.name},
+            "linked_recipe": {
+                "id": target.id,
+                "name": target.name,
+                "recipe_url": client.recipe_url(target.id)
+            },
+            "scope": "global_food",
+            "warning": "This relation affects every ingredient occurrence using this Food record."
+        }))
+    }
+
+    #[tool(
+        description = "Clear the global recipe relation from a Food record. This is destructive but idempotent; ingredient occurrences and both resources remain.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn unlink_food_recipe(
+        &self,
+        Parameters(params): Parameters<UnlinkFoodRecipeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let client = auth_or_return!(self);
+        let food = match client.get_food(params.food_id).await {
+            Ok(food) => food,
+            Err(e) => return tool_err("Food not found", e),
+        };
+        if food.recipe.is_none() {
+            return tool_ok(json!({"status": "already_unlinked", "food_id": food.id}));
+        }
+        if let Err(e) = client.set_food_recipe(food.id, None).await {
+            return tool_err("Failed to unlink food recipe", e);
+        }
+        tool_ok(json!({
+            "status": "unlinked",
+            "food_id": food.id,
+            "scope": "global_food"
+        }))
+    }
+
+    #[tool(
+        description = "Insert an ingredient-list section header into an existing step, optionally before a stable ingredient id. Existing ingredients and values are preserved.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn add_ingredient_header(
+        &self,
+        Parameters(params): Parameters<AddIngredientHeaderParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let header = params.header.trim();
+        if header.is_empty() {
+            return tool_err("Invalid ingredient header", "Header text cannot be empty");
+        }
+        let client = auth_or_return!(self);
+        let parent = match client.get_recipe(params.parent_recipe_id).await {
+            Ok(recipe) => recipe,
+            Err(e) => return tool_err("Parent recipe not found", e),
+        };
+        let Some(step) = parent.steps.iter().find(|step| step.id == params.step_id) else {
+            return tool_err(
+                "Step does not belong to parent recipe",
+                format!(
+                    "Recipe {} has no step {}",
+                    params.parent_recipe_id, params.step_id
+                ),
+            );
+        };
+        let patch = match build_header_patch(step, header, params.before_ingredient_id) {
+            Ok(patch) => patch,
+            Err(e) => return tool_err("Invalid ingredient position", e),
+        };
+        let existing_ids: std::collections::HashSet<_> = step
+            .ingredients
+            .iter()
+            .map(|ingredient| ingredient.id)
+            .collect();
+        let updated = match client
+            .update_step(step.id, json!({"ingredients": patch}))
+            .await
+        {
+            Ok(step) => step,
+            Err(e) => return tool_err("Failed to add ingredient header", e),
+        };
+        let created_id = updated
+            .ingredients
+            .iter()
+            .find(|ingredient| {
+                !existing_ids.contains(&ingredient.id)
+                    && ingredient.is_header
+                    && ingredient.note.as_deref() == Some(header)
+            })
+            .map(|ingredient| ingredient.id);
+        tool_ok(json!({
+            "status": "added",
+            "parent_recipe_id": parent.id,
+            "step_id": step.id,
+            "header": header,
+            "ingredient_id": created_id,
+            "before_ingredient_id": params.before_ingredient_id
+        }))
+    }
+
+    #[tool(
+        description = "Set whether the authenticated Tandoor account automatically includes related recipes when building meal-plan shopping lists. This changes one account-wide preference.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn set_related_recipe_mealplan_inclusion(
+        &self,
+        Parameters(params): Parameters<SetRelatedRecipeMealplanInclusionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let client = auth_or_return!(self);
+        match client
+            .set_related_recipe_mealplan_inclusion(params.enabled)
+            .await
+        {
+            Ok(preference) => tool_ok(json!({
+                "status": "updated",
+                "user_id": preference.user.id(),
+                "mealplan_autoinclude_related": preference.mealplan_autoinclude_related,
+                "scope": "authenticated_account"
+            })),
+            Err(e) => tool_err("Failed to update related-recipe meal-plan inclusion", e),
+        }
     }
 
     #[tool(
@@ -6591,6 +7139,23 @@ mod tests {
         })
     }
 
+    fn recipe(id: i32, name: &str, steps: serde_json::Value) -> crate::client::types::Recipe {
+        serde_json::from_value(json!({
+            "id": id,
+            "name": name,
+            "description": null,
+            "instructions": null,
+            "servings": 2,
+            "working_time": 0,
+            "waiting_time": 0,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "internal": false,
+            "steps": steps
+        }))
+        .unwrap()
+    }
+
     /// Two steps, deliberately listed out of order: step_number 1 is id 10 (order 1),
     /// step_number 2 is id 20 (order 2).
     fn sample_steps() -> Vec<crate::client::types::Step> {
@@ -6756,12 +7321,60 @@ mod tests {
     #[test]
     fn header_ingredient_parses_and_renders_as_header() {
         let steps = steps_with_header();
-        let view = steps_view(&steps, 1.0);
+        let client = TandoorClient::new("https://recipes.example".to_string());
+        let view = steps_view(&steps, 1.0, &client);
         assert_eq!(
             view[0]["ingredients"][0],
-            json!({"header": "For the sauce"})
+            json!({"ingredient_id": 300, "header": "For the sauce"})
         );
         assert_eq!(view[0]["ingredients"][1]["food"], "Tomato");
+    }
+
+    #[test]
+    fn positioned_header_patch_keeps_existing_ingredients_by_id() {
+        let steps = sample_steps();
+        let step = steps.iter().find(|step| step.id == 10).unwrap();
+        let patch = build_header_patch(step, "For the sauce", Some(102)).unwrap();
+        assert_eq!(patch.len(), 3);
+        assert_eq!(patch[0], json!({"id": 101, "order": 0}));
+        assert_eq!(patch[1]["note"], "For the sauce");
+        assert_eq!(patch[1]["is_header"], true);
+        assert_eq!(patch[2], json!({"id": 102, "order": 2}));
+        assert!(build_header_patch(step, "Missing", Some(999)).is_err());
+    }
+
+    #[test]
+    fn relation_candidates_match_exact_names_and_report_ambiguity() {
+        let parent_steps = json!([{
+            "id": 10,
+            "name": "Assemble",
+            "instruction": "",
+            "ingredients": [ingredient(100, " Sauce ", 0)],
+            "time": null,
+            "order": 0,
+            "file": null
+        }]);
+        let client = TandoorClient::new("https://recipes.example".to_string());
+        let recipes = vec![
+            recipe(1, "Salad", parent_steps.clone()),
+            recipe(2, "sauce", json!([])),
+            recipe(3, "Sauce extra", json!([])),
+        ];
+        let (candidates, ambiguous) = find_relation_candidates(&recipes, None, &client);
+        assert_eq!(candidates.len(), 1);
+        assert!(ambiguous.is_empty());
+        assert_eq!(candidates[0]["source"]["step_id"], 10);
+        assert_eq!(candidates[0]["source"]["ingredient_id"], 100);
+        assert_eq!(candidates[0]["proposed_recipe"]["id"], 2);
+
+        let duplicate = vec![
+            recipe(1, "Salad", parent_steps),
+            recipe(2, "Sauce", json!([])),
+            recipe(3, " sauce ", json!([])),
+        ];
+        let (candidates, ambiguous) = find_relation_candidates(&duplicate, None, &client);
+        assert!(candidates.is_empty());
+        assert_eq!(ambiguous.len(), 1);
     }
 
     #[test]
@@ -7080,7 +7693,7 @@ mod annotation_tests {
     #[test]
     fn every_tool_declares_annotations() {
         let tools = TandoorMcpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 57, "unexpected tool count");
+        assert_eq!(tools.len(), 64, "unexpected tool count");
 
         for tool in &tools {
             let name = tool.name.as_ref();
