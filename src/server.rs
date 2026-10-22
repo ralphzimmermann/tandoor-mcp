@@ -1979,6 +1979,10 @@ impl TandoorMcpServer {
         &self,
         Parameters(params): Parameters<GetRecipeDetailsParams>,
     ) -> Result<CallToolResult, McpError> {
+        if params.servings.is_some_and(|servings| servings <= 0) {
+            return tool_err("Invalid servings", "servings must be at least 1");
+        }
+
         // Ensure we're authenticated before making API calls
         let client = match self.ensure_authenticated().await {
             Ok(client) => client,
@@ -1999,11 +2003,14 @@ impl TandoorMcpServer {
         match client.get_recipe(params.id).await {
             Ok(recipe) => {
                 let scaling_factor = if let Some(target_servings) = params.servings {
-                    if let Some(original_servings) = recipe.servings {
-                        target_servings as f64 / original_servings as f64
-                    } else {
-                        1.0
+                    let original_servings = recipe.servings.unwrap_or(1);
+                    if original_servings <= 0 {
+                        return tool_err(
+                            "Cannot scale recipe",
+                            "the stored recipe servings must be at least 1",
+                        );
                     }
+                    target_servings as f64 / original_servings as f64
                 } else {
                     1.0
                 };
@@ -4927,7 +4934,16 @@ impl TandoorMcpServer {
                 }
             };
 
-            let scale = plan.servings / f64::from(detailed.servings.unwrap_or(1));
+            let base_servings = detailed.servings.unwrap_or(1);
+            if base_servings <= 0 || !plan.servings.is_finite() || plan.servings <= 0.0 {
+                errors.push(json!({
+                    "meal_plan_id": plan.id,
+                    "recipe_id": recipe.id,
+                    "error": "Recipe and meal-plan servings must be greater than zero"
+                }));
+                continue;
+            }
+            let scale = plan.servings / f64::from(base_servings);
             let mut entries = Vec::new();
 
             for step in &detailed.steps {
@@ -5044,23 +5060,26 @@ impl TandoorMcpServer {
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&json!({
-                "added": added,
-                "groups": groups,
-                "errors": errors,
-                "meal_plans_processed": meal_plans.len(),
-                "skipped_on_hand": skipped_on_hand,
-                "message": format!(
-                    "Added {} linked ingredients to shopping list from {} meal plans ({} to {})",
-                    added,
-                    meal_plans.len(),
-                    params.from_date,
-                    params.to_date
-                )
-            }))
-            .unwrap(),
-        )]))
+        let result = serde_json::to_string_pretty(&json!({
+            "added": added,
+            "groups": groups,
+            "errors": errors,
+            "meal_plans_processed": meal_plans.len(),
+            "skipped_on_hand": skipped_on_hand,
+            "message": format!(
+                "Added {} linked ingredients to shopping list from {} meal plans ({} to {})",
+                added,
+                meal_plans.len(),
+                params.from_date,
+                params.to_date
+            )
+        }))
+        .unwrap();
+        if added == 0 && !meal_plans.is_empty() {
+            Ok(CallToolResult::error(vec![Content::text(result)]))
+        } else {
+            Ok(CallToolResult::success(vec![Content::text(result)]))
+        }
     }
 
     #[tool(
@@ -5437,7 +5456,10 @@ impl TandoorMcpServer {
             Ok(l) => l,
             Err(e) => return tool_err("Failed to get shopping lists", e),
         };
-        let entries = client.get_all_shopping_entries().await.unwrap_or_default();
+        let entries = match client.get_all_shopping_entries().await {
+            Ok(entries) => entries,
+            Err(e) => return tool_err("Failed to get shopping-list entries", e),
+        };
         let lists: Vec<_> = lists
             .iter()
             .map(|l| {

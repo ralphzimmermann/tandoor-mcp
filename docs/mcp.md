@@ -32,6 +32,8 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
 - `TANDOOR_USERNAME`: shared Tandoor account; default `admin`.
 - `TANDOOR_PASSWORD`: password for that account; default `admin`.
 - `TANDOOR_AUTH_TOKEN`: reusable Tandoor token supported by the server API.
+  Blank values are treated as unset so Compose can fall back to
+  username/password authentication.
 - `BIND_ADDR`: listen address; default `127.0.0.1:3001`.
 - `MCP_ALLOWED_HOSTS`: comma-separated hosts accepted by the transport's
   DNS-rebinding protection; defaults to loopback hosts. The Compose deployment
@@ -39,7 +41,8 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
   secure loopback defaults rather than disabling host validation.
 - `MCP_ALLOWED_ORIGINS`: comma-separated exact browser Origin values. With an
   empty value, requests that include `Origin` are rejected; non-browser MCP
-  clients normally omit it.
+  clients normally omit it. Allowlisted browser origins receive CORS preflight
+  and response headers for the MCP transport methods and headers.
 - `RUST_LOG`: tracing filter; default `info`.
 
 Keep the local default bind unless a reverse proxy or container network needs a
@@ -153,7 +156,9 @@ or numeric id and do not use partial-name fallback.
 
 Pagination URLs returned by Tandoor are rebased onto `TANDOOR_BASE_URL` before
 the authorization token is attached. This supports reverse proxies while
-preventing an API response from forwarding the token to another host.
+preventing an API response from forwarding the token to another host. Typed
+recipe-book, book-entry, and unit-conversion lists follow every page; malformed
+collection responses fail instead of being interpreted as empty.
 
 URL imports first parse Tandoor's source preview, then create the recipe and
 attempt its image upload. If the image fails, the recipe remains created and

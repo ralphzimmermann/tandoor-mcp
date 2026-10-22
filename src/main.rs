@@ -59,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
         password.clone(),
     );
 
-    let authentication_result = if let Ok(token) = env::var("TANDOOR_AUTH_TOKEN") {
+    // Compose expands an unset optional variable to an empty string. Treat blank
+    // secrets as absent so username/password authentication remains available.
+    let configured_token = non_empty_secret(env::var("TANDOOR_AUTH_TOKEN").ok());
+    let authentication_result = if let Some(token) = configured_token {
         tracing::info!("Using TANDOOR_AUTH_TOKEN");
         test_server.set_global_auth_token(token).await
     } else {
@@ -111,9 +114,35 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn non_empty_secret(value: Option<String>) -> Option<String> {
+    value
+        .map(|secret| secret.trim().to_owned())
+        .filter(|secret| !secret.is_empty())
+}
+
 async fn shutdown_signal() {
     if let Err(error) = tokio::signal::ctrl_c().await {
         tracing::error!("Failed to listen for shutdown signal: {error}");
     }
     tracing::info!("Shutting down...");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::non_empty_secret;
+
+    #[test]
+    fn blank_optional_secret_is_absent() {
+        assert_eq!(non_empty_secret(None), None);
+        assert_eq!(non_empty_secret(Some(String::new())), None);
+        assert_eq!(non_empty_secret(Some(" \n\t".to_string())), None);
+    }
+
+    #[test]
+    fn configured_optional_secret_is_trimmed() {
+        assert_eq!(
+            non_empty_secret(Some("  tda_example  ".to_string())),
+            Some("tda_example".to_string())
+        );
+    }
 }

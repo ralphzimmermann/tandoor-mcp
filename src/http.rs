@@ -9,7 +9,13 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{header::ORIGIN, StatusCode},
+    http::{
+        header::{
+            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, ORIGIN, VARY,
+        },
+        Method, StatusCode,
+    },
     middleware::{self, Next},
     response::Response,
     Router,
@@ -61,12 +67,46 @@ async fn validate_origin(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if let Some(origin) = request.headers().get(ORIGIN) {
+    let origin = request.headers().get(ORIGIN).cloned();
+    if let Some(origin) = origin.as_ref() {
         let origin = origin.to_str().map_err(|_| StatusCode::FORBIDDEN)?;
         if !allowed_origins.iter().any(|allowed| allowed == origin) {
             return Err(StatusCode::FORBIDDEN);
         }
     }
 
-    Ok(next.run(request).await)
+    let mut response = if request.method() == Method::OPTIONS && origin.is_some() {
+        Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(Body::empty())
+            .expect("static CORS response must be valid")
+    } else {
+        next.run(request).await
+    };
+
+    if let Some(origin) = origin {
+        let headers = response.headers_mut();
+        headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        headers.insert(
+            ACCESS_CONTROL_ALLOW_METHODS,
+            "GET, POST, DELETE, OPTIONS"
+                .parse()
+                .expect("static CORS methods must be valid"),
+        );
+        headers.insert(
+            ACCESS_CONTROL_ALLOW_HEADERS,
+            "authorization, content-type, accept, mcp-protocol-version, mcp-session-id, mcp-method, mcp-name"
+                .parse()
+                .expect("static CORS headers must be valid"),
+        );
+        headers.insert(
+            ACCESS_CONTROL_EXPOSE_HEADERS,
+            "mcp-session-id"
+                .parse()
+                .expect("static exposed headers must be valid"),
+        );
+        headers.insert(VARY, "Origin".parse().expect("static Vary must be valid"));
+    }
+
+    Ok(response)
 }

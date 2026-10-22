@@ -163,6 +163,44 @@ impl TandoorClient {
         Ok(response.json().await?)
     }
 
+    /// Fetch every page of a typed Django REST Framework collection.
+    ///
+    /// Page URLs are always rebased onto the configured Tandoor origin before
+    /// authentication is attached, and the page cap prevents unbounded loops
+    /// if an API returns a cyclic `next` link.
+    async fn get_all_paginated<T>(
+        &self,
+        initial_url: String,
+        resource: &str,
+    ) -> Result<PaginatedResponse<T>>
+    where
+        T: DeserializeOwned,
+    {
+        let mut next = Some(initial_url);
+        let mut results = Vec::new();
+        let mut count = None;
+        let mut pages = 0;
+
+        while let Some(page_url) = next {
+            pages += 1;
+            anyhow::ensure!(
+                pages <= MAX_PAGINATION_PAGES,
+                "Refusing to read more than {MAX_PAGINATION_PAGES} pages of {resource}"
+            );
+            let mut page = self.get_paginated_page(&page_url, resource).await?;
+            count.get_or_insert(page.count);
+            next = page.next.take();
+            results.append(&mut page.results);
+        }
+
+        Ok(PaginatedResponse {
+            count: count.unwrap_or(results.len() as i32),
+            next: None,
+            previous: None,
+            results,
+        })
+    }
+
     /// Fetches a further page of recipe search results (a `next` URL from Tandoor).
     pub async fn get_recipe_page(&self, url: &str) -> Result<PaginatedResponse<Recipe>> {
         self.get_paginated_page(url, "recipes").await
@@ -844,9 +882,15 @@ impl TandoorClient {
                     url = None;
                 }
                 mut page => {
-                    if let Some(serde_json::Value::Array(results)) = page.get_mut("results") {
-                        items.append(results);
-                    }
+                    let results = page
+                        .get_mut("results")
+                        .and_then(serde_json::Value::as_array_mut)
+                        .with_context(|| {
+                            format!(
+                                "Invalid paginated {resource} response: results must be an array"
+                            )
+                        })?;
+                    items.append(results);
                     url = page
                         .get("next")
                         .and_then(|n| n.as_str())
@@ -1579,25 +1623,11 @@ impl TandoorClient {
         &self,
         query: Option<&str>,
     ) -> Result<PaginatedResponse<RecipeBook>> {
-        let auth_header = self.get_auth_header()?;
-        let mut url = format!("{}/api/recipe-book/", self.base_url);
+        let mut url = format!("{}/api/recipe-book/?page_size=100", self.base_url);
         if let Some(q) = query {
-            url.push_str(&format!("?query={}", urlencoding::encode(q)));
+            url.push_str(&format!("&query={}", urlencoding::encode(q)));
         }
-
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to Tandoor API: {e}"))?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("Failed to get recipe books: {}", response.status());
-        }
-        let books = response.json().await?;
-        Ok(books)
+        self.get_all_paginated(url, "recipe books").await
     }
 
     pub async fn create_recipe_book(&self, request: CreateRecipeBookRequest) -> Result<RecipeBook> {
@@ -1666,25 +1696,11 @@ impl TandoorClient {
         &self,
         book_id: Option<i32>,
     ) -> Result<PaginatedResponse<RecipeBookEntry>> {
-        let auth_header = self.get_auth_header()?;
-        let mut url = format!("{}/api/recipe-book-entry/", self.base_url);
+        let mut url = format!("{}/api/recipe-book-entry/?page_size=100", self.base_url);
         if let Some(b) = book_id {
-            url.push_str(&format!("?book={b}"));
+            url.push_str(&format!("&book={b}"));
         }
-
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to Tandoor API: {e}"))?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("Failed to get recipe book entries: {}", response.status());
-        }
-        let entries = response.json().await?;
-        Ok(entries)
+        self.get_all_paginated(url, "recipe book entries").await
     }
 
     pub async fn add_to_recipe_book(
@@ -1757,25 +1773,11 @@ impl TandoorClient {
         &self,
         food_id: Option<i64>,
     ) -> Result<PaginatedResponse<UnitConversion>> {
-        let auth_header = self.get_auth_header()?;
-        let mut url = format!("{}/api/unit-conversion/", self.base_url);
+        let mut url = format!("{}/api/unit-conversion/?page_size=100", self.base_url);
         if let Some(f) = food_id {
-            url.push_str(&format!("?food={f}"));
+            url.push_str(&format!("&food={f}"));
         }
-
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to Tandoor API: {e}"))?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("Failed to get unit conversions: {}", response.status());
-        }
-        let conversions = response.json().await?;
-        Ok(conversions)
+        self.get_all_paginated(url, "unit conversions").await
     }
 }
 
@@ -1868,7 +1870,8 @@ async fn public_recipe_image(url: &Url) -> Result<(Vec<u8>, &'static str)> {
 #[cfg(test)]
 mod recipe_image_tests {
     use super::*;
-    use axum::{http::HeaderMap, response::Redirect, routing::get, Router};
+    use axum::{extract::Query, http::HeaderMap, response::Redirect, routing::get, Json, Router};
+    use std::collections::HashMap;
 
     async fn stored_image(headers: HeaderMap) -> ([(&'static str, &'static str); 1], Vec<u8>) {
         assert_eq!(
@@ -1891,6 +1894,37 @@ mod recipe_image_tests {
             Some("Bearer test-token")
         );
         Redirect::temporary("/media/recipes/porridge.png")
+    }
+
+    async fn paginated_items(
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        assert_eq!(
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-token")
+        );
+        if query.get("page").is_some_and(|page| page == "2") {
+            Json(serde_json::json!({
+                "count": 2,
+                "next": null,
+                "previous": "/api/test/?page=1",
+                "results": [{"id": 2}]
+            }))
+        } else {
+            Json(serde_json::json!({
+                "count": 2,
+                "next": "https://untrusted.example/api/test/?page=2",
+                "previous": null,
+                "results": [{"id": 1}]
+            }))
+        }
+    }
+
+    async fn malformed_page() -> Json<serde_json::Value> {
+        Json(serde_json::json!({"count": 1, "next": null}))
     }
 
     #[test]
@@ -1980,6 +2014,36 @@ mod recipe_image_tests {
             client.get_recipe_image("/redirected-image").await.unwrap();
         assert_eq!(redirected_mime_type, "image/png");
         assert_eq!(redirected_bytes, b"\x89PNG\r\n\x1a\nstored-recipe-image");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn pagination_follows_all_pages_and_rejects_missing_results() {
+        let app = Router::new()
+            .route("/api/test/", get(paginated_items))
+            .route("/api/malformed/", get(malformed_page));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let mut client = TandoorClient::new(format!("http://{address}"));
+        client.set_token("test-token".to_string());
+        let page: PaginatedResponse<serde_json::Value> = client
+            .get_all_paginated(
+                format!("http://{address}/api/test/?page_size=100"),
+                "test items",
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.count, 2);
+        assert_eq!(page.results.len(), 2);
+        assert_eq!(page.results[1]["id"], 2);
+        assert!(page.next.is_none());
+
+        let error = client.api_list_all("malformed").await.unwrap_err();
+        assert!(error.to_string().contains("results must be an array"));
         server.abort();
     }
 }

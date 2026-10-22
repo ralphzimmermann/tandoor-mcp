@@ -171,18 +171,30 @@ fn is_public_ip(ip: IpAddr) -> bool {
                 || octets[0] == 0
                 || (octets[0] == 100 && (64..=127).contains(&octets[1]))
                 || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
-                || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19)))
+                || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
+                || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+                || octets[0] >= 240)
         }
         IpAddr::V6(ip) => {
             if let Some(mapped) = ip.to_ipv4_mapped() {
                 return is_public_ip(IpAddr::V4(mapped));
             }
-            !(ip.is_loopback()
+            let segments = ip.segments();
+            // Public IPv6 allocation currently comes from 2000::/3. Keeping
+            // the allowlist bounded to that range also rejects local-use
+            // translation prefixes such as 64:ff9b:1::/48 and deprecated
+            // site-local space without relying on an incomplete denylist.
+            let globally_allocated = segments[0] & 0xe000 == 0x2000;
+            globally_allocated
+                && !(ip.is_loopback()
                 || ip.is_unspecified()
                 || ip.is_multicast()
                 || ip.is_unique_local()
                 || ip.is_unicast_link_local()
-                || ip.segments()[0] == 0x2001 && ip.segments()[1] == 0x0db8)
+                || (segments[0] == 0x2001 && segments[1] <= 0x01ff) // special-purpose /23
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8) // documentation
+                || segments[0] == 0x2002 // 6to4 embeds an unchecked IPv4 target
+                || (segments[0] == 0x3fff && segments[1] & 0xf000 == 0)) // documentation
         }
     }
 }
@@ -199,9 +211,16 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3)),
             IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)),
             IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1)),
+            IpAddr::V4(Ipv4Addr::new(240, 0, 0, 1)),
             IpAddr::V6(Ipv6Addr::LOCALHOST),
             "fd00::1".parse().unwrap(),
+            "fec0::1".parse().unwrap(),
+            "64:ff9b:1::1".parse().unwrap(),
+            "2001::1".parse().unwrap(),
+            "2001:1::1".parse().unwrap(),
+            "2002:0a00:0001::1".parse().unwrap(),
             "2001:db8::1".parse().unwrap(),
+            "3fff::1".parse().unwrap(),
         ] {
             assert!(!is_public_ip(ip), "{ip} must be rejected");
         }

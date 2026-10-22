@@ -95,7 +95,7 @@ jobs:
               docker logs tandoor 2>&1 || true
               exit 1
             fi
-            if curl -s --max-time 3 http://localhost:8080/api/ -o /dev/null; then
+            if curl -sf --max-time 3 http://localhost:8080/ -o /dev/null; then
               echo "Tandoor is ready"
               exit 0
             fi
@@ -108,31 +108,59 @@ jobs:
 
       - name: Create test user and get auth token
         run: |
+          set -euo pipefail
           PYTHON=/opt/recipes/venv/bin/python
           # Wait for the container's own startup migrations to finish
+          MIGRATIONS_READY=false
           for i in $(seq 1 30); do
-            if docker exec tandoor $PYTHON /opt/recipes/manage.py showmigrations auth \
-                2>/dev/null | grep -q "\[X\]"; then
+            MIGRATIONS=$(docker exec tandoor $PYTHON /opt/recipes/manage.py showmigrations \
+              2>/dev/null || true)
+            if printf '%s\n' "$MIGRATIONS" | grep -q "\[X\]" \
+                && ! printf '%s\n' "$MIGRATIONS" | grep -q "\[ \]"; then
               echo "Migrations complete"
+              MIGRATIONS_READY=true
               break
             fi
             echo "Waiting for migrations... ($i/30)"
             sleep 5
           done
-          docker exec tandoor $PYTHON /opt/recipes/manage.py createsuperuser \
-            --username admin --email admin@test.local --noinput || true
+          if [ "$MIGRATIONS_READY" != true ]; then
+            echo "Tandoor migrations did not complete"
+            docker logs tandoor 2>&1 || true
+            exit 1
+          fi
           docker exec tandoor $PYTHON /opt/recipes/manage.py shell -c "
           from django.contrib.auth import get_user_model
+          from django.contrib.auth.models import Group
+          from cookbook.models import Space, UserSpace
+
           User = get_user_model()
           u, _ = User.objects.get_or_create(username='testuser')
           u.set_password('testpass123')
           u.is_superuser = True
           u.is_staff = True
           u.save()
+
+          space, _ = Space.objects.get_or_create(
+              name='CI',
+              defaults={'created_by': u},
+          )
+          user_space, _ = UserSpace.objects.get_or_create(
+              user=u,
+              space=space,
+              defaults={'active': True},
+          )
+          user_space.active = True
+          user_space.save()
+          for group_name in ('user', 'admin'):
+              group, _ = Group.objects.get_or_create(name=group_name)
+              user_space.groups.add(group)
           "
           TOKEN=$(curl -sf -X POST http://localhost:8080/api-token-auth/ \
             -H "Content-Type: application/json" \
-            -d '{"username":"testuser","password":"testpass123"}' | jq -r '.token')
+            -d '{"username":"testuser","password":"testpass123"}' \
+            | jq -er '.token | select(type == "string" and length > 0)')
+          test -n "$TOKEN"
           echo "TANDOOR_AUTH_TOKEN=$TOKEN" >> $GITHUB_ENV
 
       - name: Run integration tests

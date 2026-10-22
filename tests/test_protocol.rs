@@ -11,6 +11,12 @@ use std::collections::BTreeSet;
 const MODERN_VERSION: &str = "2026-07-28";
 
 async fn spawn_server() -> (Client, String, tokio::task::JoinHandle<()>) {
+    spawn_server_with_origins(Vec::new()).await
+}
+
+async fn spawn_server_with_origins(
+    allowed_origins: Vec<String>,
+) -> (Client, String, tokio::task::JoinHandle<()>) {
     let server = TandoorMcpServer::new_with_credentials(
         "http://127.0.0.1:9".to_string(),
         "protocol-test".to_string(),
@@ -25,7 +31,7 @@ async fn spawn_server() -> (Client, String, tokio::task::JoinHandle<()>) {
     let router = mcp_router(
         server,
         vec!["localhost".to_string(), "127.0.0.1".to_string()],
-        Vec::new(),
+        allowed_origins,
     );
     let task = tokio::spawn(async move {
         axum::serve(listener, router)
@@ -34,6 +40,55 @@ async fn spawn_server() -> (Client, String, tokio::task::JoinHandle<()>) {
     });
 
     (Client::new(), format!("http://{address}/mcp"), task)
+}
+
+#[tokio::test]
+async fn allowlisted_browser_origin_receives_cors_headers() {
+    let allowed_origin = "https://app.example";
+    let (client, url, server_task) =
+        spawn_server_with_origins(vec![allowed_origin.to_string()]).await;
+
+    let preflight = client
+        .request(reqwest::Method::OPTIONS, &url)
+        .header("Origin", allowed_origin)
+        .header("Access-Control-Request-Method", "POST")
+        .header(
+            "Access-Control-Request-Headers",
+            "content-type,mcp-protocol-version",
+        )
+        .send()
+        .await
+        .expect("preflight should complete");
+    assert_eq!(preflight.status(), reqwest::StatusCode::NO_CONTENT);
+    assert_eq!(
+        preflight
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some(allowed_origin)
+    );
+    assert!(preflight
+        .headers()
+        .get("access-control-allow-headers")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("mcp-protocol-version")));
+
+    let response = client
+        .post(&url)
+        .header("Origin", allowed_origin)
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("allowlisted-origin request should complete");
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some(allowed_origin)
+    );
+
+    server_task.abort();
 }
 
 fn modern_meta() -> Value {
