@@ -2260,9 +2260,11 @@ impl TandoorMcpServer {
             return tool_err("Recipe has no photo", recipe.name);
         };
 
-        let (bytes, mime_type, image_url) = match params.variant {
+        // The image travels as an inline content block only. Presigned thumbnail
+        // URLs are bearer credentials and never appear in model-visible text.
+        let (bytes, mime_type) = match params.variant {
             RecipeImageVariant::Original => match client.get_recipe_image(&image_path).await {
-                Ok((bytes, mime_type)) => (bytes, mime_type, None),
+                Ok((bytes, mime_type)) => (bytes, mime_type),
                 Err(error) => return tool_err("Could not fetch recipe photo", error),
             },
             RecipeImageVariant::Thumbnail => {
@@ -2290,7 +2292,7 @@ impl TandoorMcpServer {
                     Ok(bytes) => bytes,
                     Err(error) => return tool_err("Could not load recipe thumbnail", error),
                 };
-                (bytes, "image/jpeg", Some(thumbnail.url))
+                (bytes, "image/jpeg")
             }
             RecipeImageVariant::None => {
                 return tool_err(
@@ -2304,8 +2306,7 @@ impl TandoorMcpServer {
             "recipe_id": recipe.id,
             "name": recipe.name,
             "recipe_url": client.recipe_url(recipe.id),
-            "variant": params.variant,
-            "thumbnail_url": image_url
+            "variant": params.variant
         });
         Ok(CallToolResult::success(vec![
             Content::text(description.to_string()),
@@ -2376,7 +2377,8 @@ impl TandoorMcpServer {
                     })
                     .collect();
 
-                let mut thumbnail_url = None;
+                // Only the inline image block carries the thumbnail; its presigned
+                // URL stays out of model-visible text.
                 let image_attachment = match (recipe.image.as_deref(), params.image) {
                     (_, RecipeImageVariant::None) | (None, _) => None,
                     (Some(image), RecipeImageVariant::Original) => {
@@ -2395,14 +2397,13 @@ impl TandoorMcpServer {
                                 })
                                 .await
                             {
-                                Ok(thumbnail) => {
-                                    thumbnail_url = Some(thumbnail.url.clone());
-                                    thumbnails
-                                        .bytes(&thumbnail)
-                                        .await
-                                        .map(|bytes| (bytes, "image/jpeg"))
-                                        .ok()
-                                }
+                                Ok(thumbnail) => match thumbnails.bytes(&thumbnail).await {
+                                    Ok(bytes) => Some((bytes, "image/jpeg")),
+                                    Err(error) => {
+                                        tracing::warn!(recipe_id = recipe.id, %error, "Could not load recipe thumbnail");
+                                        None
+                                    }
+                                },
                                 Err(error) => {
                                     tracing::warn!(recipe_id = recipe.id, %error, "Could not prepare recipe thumbnail");
                                     None
@@ -2451,7 +2452,6 @@ impl TandoorMcpServer {
                     "keywords": recipe.keywords.into_iter().map(|k| k.name).collect::<Vec<String>>(),
                     "image": recipe.image,
                     "requested_image_variant": params.image,
-                    "thumbnail_url": thumbnail_url,
                     "image_status": image_status,
                     "image_instruction": image_instruction,
                     "nutrition": recipe.nutrition,

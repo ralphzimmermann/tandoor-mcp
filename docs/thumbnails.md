@@ -47,6 +47,14 @@ through `get_recipe_image`.
 Changing or deleting a recipe photo attempts immediate cache invalidation. A
 content-derived key and the lifecycle policy also make stale objects harmless.
 
+The service keeps an in-memory map of objects it has seen, but trusts an entry
+for only ten minutes before repeating `HEAD`; objects removed underneath the
+server (lifecycle expiry, manual deletion) are therefore regenerated on the
+next request after that window, and a failed object read evicts the entry
+immediately. Presigned URLs appear only in gallery `_meta`; `get_recipe_image`
+and `get_recipe_details` return the photo as an inline image block and never
+place the URL in model-visible text.
+
 ## Environment variables
 
 See `.env.example`. `S3_BUCKET` enables the feature; leaving it unset preserves

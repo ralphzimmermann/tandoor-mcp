@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     future::Future,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -27,14 +27,26 @@ pub struct ThumbnailRef {
     pub height: u32,
 }
 
+/// How long a stored object's existence is trusted before `HEAD` is repeated.
+/// Objects can disappear underneath the server (lifecycle expiry, manual
+/// deletion), so the in-memory cache only bounds, not eliminates, round trips.
+const KNOWN_OBJECT_TTL: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Clone, Debug)]
+struct KnownObject {
+    metadata: StoredThumbnail,
+    verified_at: Instant,
+}
+
 #[derive(Clone)]
 pub struct ThumbnailService {
     store: Arc<dyn ThumbnailStore>,
     prefix: String,
     max_edge: u32,
     url_ttl: Duration,
+    known_ttl: Duration,
     resource_origin: String,
-    known: Arc<Mutex<HashMap<String, StoredThumbnail>>>,
+    known: Arc<Mutex<HashMap<String, KnownObject>>>,
     generation_slots: Arc<Semaphore>,
 }
 
@@ -49,10 +61,36 @@ impl ThumbnailService {
             prefix: config.prefix.clone(),
             max_edge: config.max_edge,
             url_ttl: config.url_ttl,
+            known_ttl: KNOWN_OBJECT_TTL,
             resource_origin,
             known: Arc::new(Mutex::new(HashMap::new())),
             generation_slots: Arc::new(Semaphore::new(4)),
         }
+    }
+
+    #[cfg(test)]
+    fn with_known_ttl(mut self, ttl: Duration) -> Self {
+        self.known_ttl = ttl;
+        self
+    }
+
+    async fn remember(&self, key: &str, metadata: &StoredThumbnail) {
+        self.known.lock().await.insert(
+            key.to_owned(),
+            KnownObject {
+                metadata: metadata.clone(),
+                verified_at: Instant::now(),
+            },
+        );
+    }
+
+    /// Cached metadata whose existence was verified recently enough to trust.
+    async fn fresh_known(&self, key: &str) -> Option<StoredThumbnail> {
+        let known = self.known.lock().await;
+        known
+            .get(key)
+            .filter(|entry| entry.verified_at.elapsed() < self.known_ttl)
+            .map(|entry| entry.metadata.clone())
     }
 
     pub fn resource_origin(&self) -> &str {
@@ -91,17 +129,10 @@ impl ThumbnailService {
         Fut: Future<Output = Result<Vec<u8>>> + Send,
     {
         let key = self.key_for(recipe_id, image_path);
-        let cached = {
-            let known = self.known.lock().await;
-            known.get(&key).cloned()
-        };
-        let metadata = if let Some(metadata) = cached {
+        let metadata = if let Some(metadata) = self.fresh_known(&key).await {
             metadata
         } else if let Some(metadata) = self.store.head(&key).await? {
-            self.known
-                .lock()
-                .await
-                .insert(key.clone(), metadata.clone());
+            self.remember(&key, &metadata).await;
             metadata
         } else {
             let _permit = self
@@ -111,10 +142,7 @@ impl ThumbnailService {
                 .context("Thumbnail generator is unavailable")?;
             // Another request might have completed while this request waited.
             if let Some(metadata) = self.store.head(&key).await? {
-                self.known
-                    .lock()
-                    .await
-                    .insert(key.clone(), metadata.clone());
+                self.remember(&key, &metadata).await;
                 metadata
             } else {
                 let original = fetch_original().await?;
@@ -128,10 +156,7 @@ impl ThumbnailService {
                     height: generated.height,
                 };
                 self.store.put(&key, generated.bytes, &metadata).await?;
-                self.known
-                    .lock()
-                    .await
-                    .insert(key.clone(), metadata.clone());
+                self.remember(&key, &metadata).await;
                 metadata
             }
         };
@@ -151,8 +176,16 @@ impl ThumbnailService {
         })
     }
 
+    /// Read the stored thumbnail. A failed read evicts the cache entry so the
+    /// next request re-checks the store instead of trusting stale metadata.
     pub async fn bytes(&self, thumbnail: &ThumbnailRef) -> Result<Vec<u8>> {
-        self.store.get(&thumbnail.key).await
+        match self.store.get(&thumbnail.key).await {
+            Ok(bytes) => Ok(bytes),
+            Err(error) => {
+                self.known.lock().await.remove(&thumbnail.key);
+                Err(error)
+            }
+        }
     }
 
     pub async fn invalidate(&self, recipe_id: i32, image_path: &str) -> Result<()> {
@@ -220,5 +253,67 @@ mod tests {
 
         service.invalidate(7, "/photo.png").await.unwrap();
         assert_eq!(store.object_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn externally_deleted_object_is_regenerated_once_cache_entry_expires() {
+        let store = Arc::new(MemoryThumbnailStore::default());
+        let service = ThumbnailService::new(store.clone(), &config(), "https://test".to_owned())
+            .with_known_ttl(Duration::ZERO);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch = |calls: Arc<AtomicUsize>| {
+            move || async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(source_image())
+            }
+        };
+
+        let first = service
+            .thumbnail_for(7, "/photo.png", fetch(calls.clone()))
+            .await
+            .unwrap();
+        // Simulate S3 lifecycle expiry or a manual delete outside the server.
+        store.delete(&first.key).await.unwrap();
+        assert_eq!(store.object_count().await, 0);
+
+        let second = service
+            .thumbnail_for(7, "/photo.png", fetch(calls.clone()))
+            .await
+            .unwrap();
+        assert_eq!(second.key, first.key);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "thumbnail must be regenerated"
+        );
+        assert_eq!(store.object_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn failed_object_read_evicts_cache_entry() {
+        let store = Arc::new(MemoryThumbnailStore::default());
+        let service = ThumbnailService::new(store.clone(), &config(), "https://test".to_owned());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch = |calls: Arc<AtomicUsize>| {
+            move || async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(source_image())
+            }
+        };
+
+        let thumbnail = service
+            .thumbnail_for(7, "/photo.png", fetch(calls.clone()))
+            .await
+            .unwrap();
+        store.delete(&thumbnail.key).await.unwrap();
+        // Within the TTL the cache would still be trusted; a failed read must evict it.
+        assert!(service.bytes(&thumbnail).await.is_err());
+
+        service
+            .thumbnail_for(7, "/photo.png", fetch(calls.clone()))
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(store.object_count().await, 1);
     }
 }
