@@ -69,6 +69,12 @@ pub struct DockerEnvironment;
 
 impl DockerEnvironment {
     pub fn is_running() -> bool {
+        // CI and developers may provide an independently managed Tandoor
+        // instance instead of this repository's Compose service.
+        if std::env::var("TANDOOR_TEST_EXTERNAL_SERVER").as_deref() == Ok("true") {
+            return true;
+        }
+
         let output = Command::new("docker")
             .args(["compose", "ps", "-q", "web_recipes"])
             .stdout(Stdio::piped())

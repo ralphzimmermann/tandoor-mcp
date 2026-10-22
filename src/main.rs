@@ -7,20 +7,13 @@
 //! ## Environment Variables
 //!
 //! - `TANDOOR_BASE_URL`: Tandoor server URL (default: http://localhost:8080)
+//! - `TANDOOR_AUTH_TOKEN`: Existing API token (preferred; avoids login throttling)
 //! - `TANDOOR_USERNAME`: Tandoor username for authentication (default: admin)  
 //! - `TANDOOR_PASSWORD`: Tandoor password for authentication (default: admin)
 //! - `BIND_ADDR`: Address to bind the MCP server (default: 127.0.0.1:3001)
+//! - `MCP_ALLOWED_HOSTS`: Comma-separated hosts accepted by DNS-rebinding protection
 //! - `MCP_ALLOWED_ORIGINS`: Comma-separated browser origins allowed to call `/mcp`
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
-//!
-//! ## Usage
-//!
-//! ```bash
-//! TANDOOR_BASE_URL=http://your-tandoor-server:8080 \
-//! TANDOOR_USERNAME=your_username \
-//! TANDOOR_PASSWORD=your_password \
-//! cargo run
-//! ```
 
 use mcp_tandoor::{mcp_router, server::TandoorMcpServer};
 use std::{env, net::SocketAddr};
@@ -28,7 +21,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -37,15 +29,20 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Get configuration from environment variables
     let base_url =
         env::var("TANDOOR_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-
     let username = env::var("TANDOOR_USERNAME").unwrap_or_else(|_| "admin".to_string());
 
     let password = env::var("TANDOOR_PASSWORD").unwrap_or_else(|_| "admin".to_string());
 
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
+    let allowed_hosts = env::var("MCP_ALLOWED_HOSTS")
+        .unwrap_or_else(|_| "localhost,127.0.0.1,::1".to_string())
+        .split(',')
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(str::to_owned)
+        .collect();
     let allowed_origins = env::var("MCP_ALLOWED_ORIGINS")
         .unwrap_or_default()
         .split(',')
@@ -62,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
         password.clone(),
     );
 
-    let authentication_result = if let Ok(token) = env::var("TANDOOR_AUTH_TOKEN") {
+    // Compose expands an unset optional variable to an empty string. Treat blank
+    // secrets as absent so username/password authentication remains available.
+    let configured_token = non_empty_secret(env::var("TANDOOR_AUTH_TOKEN").ok());
+    let authentication_result = if let Some(token) = configured_token {
         tracing::info!("Using TANDOOR_AUTH_TOKEN");
         test_server.set_global_auth_token(token).await
     } else {
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     let bind: SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let local_addr = listener.local_addr()?;
-    let app = mcp_router(test_server, allowed_origins);
+    let app = mcp_router(test_server, allowed_hosts, allowed_origins);
 
     tracing::info!("Tandoor MCP Server listening on http://{local_addr}/mcp");
     axum::serve(listener, app)
@@ -114,9 +114,35 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn non_empty_secret(value: Option<String>) -> Option<String> {
+    value
+        .map(|secret| secret.trim().to_owned())
+        .filter(|secret| !secret.is_empty())
+}
+
 async fn shutdown_signal() {
     if let Err(error) = tokio::signal::ctrl_c().await {
         tracing::error!("Failed to listen for shutdown signal: {error}");
     }
     tracing::info!("Shutting down...");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::non_empty_secret;
+
+    #[test]
+    fn blank_optional_secret_is_absent() {
+        assert_eq!(non_empty_secret(None), None);
+        assert_eq!(non_empty_secret(Some(String::new())), None);
+        assert_eq!(non_empty_secret(Some(" \n\t".to_string())), None);
+    }
+
+    #[test]
+    fn configured_optional_secret_is_trimmed() {
+        assert_eq!(
+            non_empty_secret(Some("  tda_example  ".to_string())),
+            Some("tda_example".to_string())
+        );
+    }
 }

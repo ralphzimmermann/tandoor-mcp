@@ -35,7 +35,9 @@
 //! ```
 
 pub mod client;
+mod domain;
 pub mod http;
+mod image;
 pub mod server;
 
 pub use client::TandoorClient;

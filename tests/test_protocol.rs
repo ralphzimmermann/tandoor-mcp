@@ -6,10 +6,17 @@
 use mcp_tandoor::{mcp_router, TandoorMcpServer};
 use reqwest::{Client, Response};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 const MODERN_VERSION: &str = "2026-07-28";
 
 async fn spawn_server() -> (Client, String, tokio::task::JoinHandle<()>) {
+    spawn_server_with_origins(Vec::new()).await
+}
+
+async fn spawn_server_with_origins(
+    allowed_origins: Vec<String>,
+) -> (Client, String, tokio::task::JoinHandle<()>) {
     let server = TandoorMcpServer::new_with_credentials(
         "http://127.0.0.1:9".to_string(),
         "protocol-test".to_string(),
@@ -21,7 +28,11 @@ async fn spawn_server() -> (Client, String, tokio::task::JoinHandle<()>) {
     let address = listener
         .local_addr()
         .expect("test listener should have an address");
-    let router = mcp_router(server, Vec::new());
+    let router = mcp_router(
+        server,
+        vec!["localhost".to_string(), "127.0.0.1".to_string()],
+        allowed_origins,
+    );
     let task = tokio::spawn(async move {
         axum::serve(listener, router)
             .await
@@ -29,6 +40,55 @@ async fn spawn_server() -> (Client, String, tokio::task::JoinHandle<()>) {
     });
 
     (Client::new(), format!("http://{address}/mcp"), task)
+}
+
+#[tokio::test]
+async fn allowlisted_browser_origin_receives_cors_headers() {
+    let allowed_origin = "https://app.example";
+    let (client, url, server_task) =
+        spawn_server_with_origins(vec![allowed_origin.to_string()]).await;
+
+    let preflight = client
+        .request(reqwest::Method::OPTIONS, &url)
+        .header("Origin", allowed_origin)
+        .header("Access-Control-Request-Method", "POST")
+        .header(
+            "Access-Control-Request-Headers",
+            "content-type,mcp-protocol-version",
+        )
+        .send()
+        .await
+        .expect("preflight should complete");
+    assert_eq!(preflight.status(), reqwest::StatusCode::NO_CONTENT);
+    assert_eq!(
+        preflight
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some(allowed_origin)
+    );
+    assert!(preflight
+        .headers()
+        .get("access-control-allow-headers")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("mcp-protocol-version")));
+
+    let response = client
+        .post(&url)
+        .header("Origin", allowed_origin)
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("allowlisted-origin request should complete");
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some(allowed_origin)
+    );
+
+    server_task.abort();
 }
 
 fn modern_meta() -> Value {
@@ -126,7 +186,73 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     let second_tools = second["result"]["tools"]
         .as_array()
         .expect("tools/list should return tools");
-    assert_eq!(first_tools.len(), 18);
+    let expected: BTreeSet<_> = [
+        "search_recipes",
+        "get_recipe_details",
+        "create_recipe",
+        "import_recipe_from_url",
+        "update_recipe",
+        "set_recipe_image",
+        "remove_recipe_image",
+        "delete_recipe",
+        "get_recipe_books",
+        "create_recipe_book",
+        "update_recipe_book",
+        "delete_recipe_book",
+        "add_to_recipe_book",
+        "remove_from_recipe_book",
+        "get_recipe_book_entries",
+        "add_to_shopping_list",
+        "get_shopping_list",
+        "update_shopping_list_item",
+        "check_shopping_items",
+        "remove_from_shopping_list",
+        "clear_shopping_list",
+        "add_recipe_to_shopping_list",
+        "add_meal_plan_to_shopping_list",
+        "get_shopping_list_recipes",
+        "update_shopping_list_recipe",
+        "remove_recipe_from_shopping_list",
+        "get_shopping_lists",
+        "create_shopping_list",
+        "update_shopping_list",
+        "delete_shopping_list",
+        "get_supermarkets",
+        "create_supermarket",
+        "update_supermarket",
+        "delete_supermarket",
+        "get_supermarket_categories",
+        "create_supermarket_category",
+        "update_supermarket_category",
+        "delete_supermarket_category",
+        "set_food_category",
+        "search_foods",
+        "update_pantry",
+        "find_duplicate_foods",
+        "merge_foods",
+        "suggest_from_inventory",
+        "get_unit_conversions",
+        "get_meal_plans",
+        "create_meal_plan",
+        "update_meal_plan",
+        "delete_meal_plan",
+        "get_meal_types",
+        "get_keywords",
+        "get_units",
+        "get_cook_log",
+        "log_cooked_recipe",
+    ]
+    .into_iter()
+    .collect();
+    let actual: BTreeSet<_> = first_tools
+        .iter()
+        .map(|tool| {
+            tool["name"]
+                .as_str()
+                .expect("every tool should have a name")
+        })
+        .collect();
+    assert_eq!(actual, expected);
     assert_eq!(
         first_tools, second_tools,
         "tool order must be deterministic"
@@ -143,6 +269,8 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     assert_eq!(annotation("create_recipe")["destructiveHint"], false);
     assert_eq!(annotation("delete_meal_plan")["destructiveHint"], true);
     assert_eq!(annotation("update_pantry")["idempotentHint"], true);
+    assert_eq!(annotation("merge_foods")["destructiveHint"], true);
+    assert_eq!(annotation("get_recipe_books")["readOnlyHint"], true);
 
     let call = modern_post(
         &client,
@@ -165,6 +293,15 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
 #[tokio::test]
 async fn transport_rejects_bad_origin_and_protocol_mismatch() {
     let (client, url, server_task) = spawn_server().await;
+
+    let bad_host = client
+        .post(&url)
+        .header("Host", "evil.example")
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("host test request should complete");
+    assert_eq!(bad_host.status(), reqwest::StatusCode::FORBIDDEN);
 
     let bad_origin = client
         .post(&url)

@@ -307,7 +307,8 @@ pub struct Step {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StepIngredient {
     pub id: i32,
-    pub food: Food,
+    /// None for section headers (is_header), which carry their text in `note`
+    pub food: Option<Food>,
     pub unit: Option<Unit>,
     pub amount: f64,
     pub note: Option<String>,
@@ -329,6 +330,9 @@ pub struct Food {
     pub recipe: Option<serde_json::Value>,
     #[serde(default)]
     pub food_onhand: bool,
+    /// Whether a configured substitute is currently on hand.
+    #[serde(default)]
+    pub substitute_onhand: bool,
     /// Category id or nested object depending on endpoint.
     #[serde(default)]
     pub supermarket_category: Option<serde_json::Value>,
@@ -388,8 +392,8 @@ pub struct Nutrition {
 pub struct ShoppingListEntry {
     /// Unique entry identifier
     pub id: i32,
-    /// Food item to purchase
-    pub food: Food,
+    /// Food item to purchase (Tandoor sends a slimmer food object here than elsewhere)
+    pub food: ShoppingFood,
     /// Measurement unit (grams, cups, etc.)
     pub unit: Option<Unit>,
     /// Quantity to purchase
@@ -400,8 +404,8 @@ pub struct ShoppingListEntry {
     /// Whether this item has been purchased
     pub checked: bool,
     /// When this entry was added
-    #[serde(rename = "created_at", alias = "created")]
-    pub created: DateTime<Utc>,
+    #[serde(rename = "created_at", alias = "created", default)]
+    pub created: Option<DateTime<Utc>>,
     /// When this item was marked as purchased
     #[serde(rename = "completed_at", alias = "completed", default)]
     pub completed: Option<DateTime<Utc>>,
@@ -409,10 +413,40 @@ pub struct ShoppingListEntry {
     #[serde(default)]
     pub delay_until: Option<DateTime<Utc>>,
     /// User who added this entry
-    pub created_by: UserOrId,
+    #[serde(default)]
+    pub created_by: Option<UserOrId>,
     /// User who marked this as completed
     #[serde(default)]
     pub completed_by: Option<UserOrId>,
+    /// Set when the entry was added from a recipe or meal plan
+    #[serde(default)]
+    pub list_recipe: Option<i32>,
+    /// Named shopping lists this entry is on
+    #[serde(default)]
+    pub shopping_lists: Vec<NamedRef>,
+}
+
+/// A minimal {id, name} reference to another object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedRef {
+    pub id: i32,
+    pub name: String,
+}
+
+/// The food object embedded in a shopping list entry.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ShoppingFood {
+    pub id: i32,
+    pub name: String,
+    #[serde(default)]
+    pub plural_name: Option<String>,
+    /// Shopping endpoints often omit pantry state; default it when absent.
+    #[serde(default)]
+    pub food_onhand: bool,
+    #[serde(default)]
+    pub substitute_onhand: bool,
+    #[serde(default)]
+    pub supermarket_category: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -484,6 +518,16 @@ pub struct RecipeImport {
     pub url: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecipeFromSourceResponse {
+    pub recipe: Option<serde_json::Value>,
+    pub recipe_id: Option<i64>,
+    pub images: Vec<serde_json::Value>,
+    pub error: bool,
+    pub msg: String,
+    pub duplicates: Vec<serde_json::Value>,
+}
+
 /// Standard paginated response wrapper used by most Tandoor API endpoints.
 ///
 /// This follows Django REST framework pagination format.
@@ -504,7 +548,10 @@ pub struct PaginatedResponse<T> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateRecipeRequest {
     pub name: String,
+    // Tandoor rejects null for these, so omit them when unset
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub servings: Option<i32>,
     pub working_time: i32,
     pub waiting_time: i32,
@@ -519,16 +566,20 @@ pub struct CreateKeywordRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateStepRequest {
+    // Tandoor rejects null for these, so omit them when unset
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub instruction: String,
     pub ingredients: Vec<CreateStepIngredientRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub time: Option<i32>,
     pub order: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateStepIngredientRequest {
-    pub food: CreateFoodRequest,
+    /// None for section headers
+    pub food: Option<CreateFoodRequest>,
     pub unit: Option<CreateUnitRequest>,
     pub amount: String,
     pub note: Option<String>,
@@ -555,15 +606,24 @@ pub struct CreateShoppingListEntryRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ApiNamedReference {
+    pub id: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CreateMealPlanRequest {
-    pub recipe: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<ApiNamedReference>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub servings: f64,
     /// Meal-plan window start (ISO-8601). Required by current Tandoor.
     pub from_date: DateTime<Utc>,
     /// Meal-plan window end (ISO-8601). Defaults to `from_date` when omitted by callers.
     pub to_date: DateTime<Utc>,
-    pub meal_type: i32,
+    pub meal_type: ApiNamedReference,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
@@ -576,17 +636,91 @@ pub struct CreateCookLogRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct NewFoodRequest {
+    pub name: String,
+    pub food_onhand: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supermarket_category: Option<SupermarketCategoryRef>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SupermarketCategoryRef {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateFoodRequest {
     pub food_onhand: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateShoppingListEntryRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub checked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub amount: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct BulkShoppingListRequest {
     pub entries: Vec<CreateShoppingListEntryRequest>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecipeBook {
+    pub id: i32,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub shared: Vec<serde_json::Value>,
+    pub filter: Option<serde_json::Value>,
+    pub order: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecipeBookEntry {
+    pub id: i32,
+    pub book: i32,
+    pub book_content: Option<serde_json::Value>,
+    pub recipe: i32,
+    pub recipe_content: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Supermarket {
+    pub id: i32,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UnitConversion {
+    pub id: i32,
+    pub name: Option<String>,
+    pub base_amount: f64,
+    pub base_unit: Option<serde_json::Value>,
+    pub converted_amount: f64,
+    pub converted_unit: Option<serde_json::Value>,
+    pub food: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRecipeBookRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub shared: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRecipeBookEntryRequest {
+    pub book: i32,
+    pub recipe: i32,
+}
+
+impl StepIngredient {
+    /// Food name, or "" for section headers that have no food
+    pub fn food_name(&self) -> &str {
+        self.food.as_ref().map(|f| f.name.as_str()).unwrap_or("")
+    }
 }
