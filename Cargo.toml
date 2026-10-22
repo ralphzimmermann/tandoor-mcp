@@ -16,6 +16,13 @@ base64 = "0.22"
 urlencoding = "2.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+async-trait = "0.1.89"
+aws-config = { version = "=1.8.13", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "=1.122.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+image = { version = "=0.25.8", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+kamadak-exif = "0.6.1"
+sha2 = "0.10.9"
+url = "2.5"
 
 [dev-dependencies]
 serial_test = "3.3"

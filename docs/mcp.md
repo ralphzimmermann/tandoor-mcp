@@ -43,6 +43,13 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
   empty value, requests that include `Origin` are rejected; non-browser MCP
   clients normally omit it. Allowlisted browser origins receive CORS preflight
   and response headers for the MCP transport methods and headers.
+- `S3_BUCKET`: private object-storage bucket for generated recipe thumbnails.
+  Unset disables inline galleries. `S3_REGION`, `S3_ENDPOINT`,
+  `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`,
+  `S3_THUMBNAIL_PREFIX`, and `S3_PUBLIC_BASE_URL` configure AWS S3 or a
+  compatible service. See [S3 thumbnails and inline gallery](thumbnails.md).
+- `THUMBNAIL_URL_TTL_SECS`: presigned thumbnail lifetime; default 86400.
+- `THUMBNAIL_MAX_EDGE`: generated JPEG longest edge; default 512.
 - `RUST_LOG`: tracing filter; default `info`.
 
 Keep the local default bind unless a reverse proxy or container network needs a
@@ -103,7 +110,7 @@ Every tool needs an action-oriented description and annotations:
 Update the server instructions when a new tool introduces a required lookup or
 ordering relationship. Keep the first 512 characters self-contained.
 
-The server currently exposes 54 tools. In addition to the original recipe,
+The server currently exposes 57 tools. In addition to the original recipe,
 shopping, pantry, meal-plan, metadata, and cooking-log operations, it supports:
 
 - targeted recipe and ingredient edits, import, deletion, and photos;
@@ -183,6 +190,60 @@ S3 objects with missing or generic `application/octet-stream` metadata are
 accepted only when their bytes have a supported image signature. Display images
 are signature checked and limited to 10 MB. If no image can be attached, the
 text result tells the model not to substitute an unrelated image.
+
+When S3 thumbnails are configured, `get_recipe_details` attaches a bounded
+thumbnail by default; `image: original` explicitly requests the existing
+full-size attachment and `image: none` omits it. `get_recipe_gallery` generates
+or reuses thumbnails, returns short-lived private URLs in widget-only `_meta`,
+and binds the result to `ui://tandoor/recipe-gallery-v7.html`. The server
+advertises the MCP resources capability and serves that URI as
+`text/html;profile=mcp-app`; ChatGPT renders the component inline.
+`get_meal_plan_gallery` similarly binds a complete date-range result to
+`ui://tandoor/meal-plan-gallery-v10.html`, keeping meal metadata, recipe summaries,
+tags, servings, and photos in one authoritative card gallery instead of relying
+on the client to reconstruct the layout from separate tool calls.
+`get_recipe_image` returns one thumbnail or original image on demand.
+
+Gallery results intentionally contain no inline image blocks. An earlier
+version attached up to 12 base64 JPEG thumbnails (about 500 KB per result) as a
+non-widget fallback; ChatGPT then never delivered the result to the component
+iframe and the widget hung on its loading text. Keep gallery results small and
+point clients without the component at `get_recipe_image`.
+
+Widget resource URIs are immutable cache keys (`RECIPE_GALLERY_URI`,
+`MEAL_PLAN_GALLERY_URI` in `server.rs`). Increment the URI when changing widget
+HTML, CSS, JavaScript, or its MCP Apps protocol handshake, then update the
+protocol tests. `resources/read` additionally serves the current HTML for any
+`ui://tandoor/recipe-gallery*.html` or `ui://tandoor/meal-plan-gallery*.html`
+URI, so a client still holding a stale cached tool descriptor loads a working
+widget instead of an "unknown resource" error.
+
+Widgets consume the standard `ui/notifications/tool-result` message and also
+subscribe to ChatGPT's `openai:set_globals` compatibility event. The latter is
+required because `window.openai.toolOutput` may be populated after the widget
+script's initial execution. Initialization is scheduled after the initial
+document execution and retried briefly because the host bridge may attach
+after an inline widget script starts. As a last resort, widgets record the
+tool arguments (`ui/notifications/tool-input` or `window.openai.toolInput`) and,
+if no result has arrived a few seconds after initialization, call the gallery
+tool themselves through the host (`window.openai.callTool` or an MCP Apps
+`tools/call` request), with one retry and a 20 s timeout. The loading copy
+names the current phase ("Connecting to ChatGPT…", "Waiting for your meal
+plan…", "Loading your meal plan…"), so a stuck widget tells you where the
+hand-off failed; a failed self-fetch ends in an explicit error instead of an
+indefinite loading state.
+
+The meal-plan component groups cards by day (locale-formatted heading via
+`Intl.DateTimeFormat` and `window.openai.locale`), hides a plan title that
+merely repeats the recipe name, renders keywords as hue-hashed tinted pills,
+humanizes minutes into hours, and clamps long plan notes behind a "Show more"
+toggle that reports the new height to the host.
+
+The widget resource CSP permits only the S3 origin derived from
+`S3_PUBLIC_BASE_URL`, `S3_ENDPOINT`, or the AWS bucket/region. For compatible
+storage, the internal operation endpoint and browser-visible signing endpoint
+may differ, but both must address the same service. Presigned URLs must not be
+rewritten after signing.
 
 ## Recipe links
 

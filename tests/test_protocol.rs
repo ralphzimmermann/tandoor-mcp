@@ -106,6 +106,7 @@ async fn modern_post(client: &Client, url: &str, method: &str, params: Value) ->
     let name = params
         .get("name")
         .and_then(Value::as_str)
+        .or_else(|| params.get("uri").and_then(Value::as_str))
         .map(str::to_owned);
     let mut request = client
         .post(url)
@@ -162,6 +163,7 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
         .iter()
         .any(|version| version == "2025-11-25"));
     assert!(result["capabilities"]["tools"].is_object());
+    assert!(result["capabilities"]["resources"].is_object());
     assert_eq!(
         result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
         "tandoor"
@@ -189,6 +191,8 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     let expected: BTreeSet<_> = [
         "search_recipes",
         "get_recipe_details",
+        "get_recipe_gallery",
+        "get_recipe_image",
         "create_recipe",
         "import_recipe_from_url",
         "update_recipe",
@@ -233,6 +237,7 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
         "suggest_from_inventory",
         "get_unit_conversions",
         "get_meal_plans",
+        "get_meal_plan_gallery",
         "create_meal_plan",
         "update_meal_plan",
         "delete_meal_plan",
@@ -271,6 +276,154 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     assert_eq!(annotation("update_pantry")["idempotentHint"], true);
     assert_eq!(annotation("merge_foods")["destructiveHint"], true);
     assert_eq!(annotation("get_recipe_books")["readOnlyHint"], true);
+    let gallery = first_tools
+        .iter()
+        .find(|tool| tool["name"] == "get_recipe_gallery")
+        .expect("gallery tool should be present");
+    assert_eq!(
+        gallery["_meta"]["ui"]["resourceUri"],
+        "ui://tandoor/recipe-gallery-v7.html"
+    );
+    let meal_gallery = first_tools
+        .iter()
+        .find(|tool| tool["name"] == "get_meal_plan_gallery")
+        .expect("meal-plan gallery tool should be present");
+    assert_eq!(
+        meal_gallery["_meta"]["ui"]["resourceUri"],
+        "ui://tandoor/meal-plan-gallery-v10.html"
+    );
+
+    let resources = response_json(
+        modern_post(
+            &client,
+            &url,
+            "resources/list",
+            json!({ "_meta": modern_meta() }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        resources["result"]["resources"][0]["uri"],
+        "ui://tandoor/recipe-gallery-v7.html"
+    );
+    assert_eq!(
+        resources["result"]["resources"][1]["uri"],
+        "ui://tandoor/meal-plan-gallery-v10.html"
+    );
+
+    let resource = response_json(
+        modern_post(
+            &client,
+            &url,
+            "resources/read",
+            json!({
+                "_meta": modern_meta(),
+                "uri": "ui://tandoor/recipe-gallery-v7.html"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        resource["result"]["contents"][0]["mimeType"],
+        "text/html;profile=mcp-app"
+    );
+    assert!(resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("widget should contain HTML")
+        .contains("tandoor-recipe-gallery"));
+    assert!(resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("widget should contain HTML")
+        .contains("protocolVersion: MCP_APPS_PROTOCOL_VERSION"));
+    assert!(resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("widget should contain HTML")
+        .contains("openai:set_globals"));
+    assert!(resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("widget should contain HTML")
+        .contains("setTimeout(initialize"));
+    assert!(resource["result"]["contents"][0]["_meta"]["ui"]["csp"]["resourceDomains"].is_array());
+
+    let meal_resource = response_json(
+        modern_post(
+            &client,
+            &url,
+            "resources/read",
+            json!({
+                "_meta": modern_meta(),
+                "uri": "ui://tandoor/meal-plan-gallery-v10.html"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        meal_resource["result"]["contents"][0]["mimeType"],
+        "text/html;profile=mcp-app"
+    );
+    assert!(meal_resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("meal-plan widget should contain HTML")
+        .contains("tandoor-meal-plan-gallery"));
+    assert!(meal_resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("meal-plan widget should contain HTML")
+        .contains("protocolVersion: MCP_APPS_PROTOCOL_VERSION"));
+    assert!(meal_resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("meal-plan widget should contain HTML")
+        .contains("openai:set_globals"));
+    assert!(meal_resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("meal-plan widget should contain HTML")
+        .contains("setTimeout(initialize"));
+    assert!(meal_resource["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("meal-plan widget should contain HTML")
+        .contains("ui/notifications/tool-input"));
+
+    // A client holding a stale cached tool descriptor must still get the current widget.
+    let stale_resource = response_json(
+        modern_post(
+            &client,
+            &url,
+            "resources/read",
+            json!({
+                "_meta": modern_meta(),
+                "uri": "ui://tandoor/meal-plan-gallery-v8.html"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        stale_resource["result"]["contents"][0]["uri"],
+        "ui://tandoor/meal-plan-gallery-v8.html"
+    );
+    assert_eq!(
+        stale_resource["result"]["contents"][0]["text"],
+        meal_resource["result"]["contents"][0]["text"]
+    );
+    let unknown_resource = response_json(
+        modern_post(
+            &client,
+            &url,
+            "resources/read",
+            json!({
+                "_meta": modern_meta(),
+                "uri": "ui://tandoor/other.html"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert!(unknown_resource["error"]["message"]
+        .as_str()
+        .expect("unknown resource should return an error")
+        .contains("Unknown resource URI"));
 
     let call = modern_post(
         &client,
