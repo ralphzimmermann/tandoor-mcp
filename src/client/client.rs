@@ -510,9 +510,9 @@ impl TandoorClient {
     }
 
     /// Set or clear the recipe linked globally from a Food record.
-    pub async fn set_food_recipe(&self, food_id: i32, recipe_id: Option<i32>) -> Result<Food> {
-        let recipe = recipe_id
-            .map(|id| serde_json::json!({"id": id}))
+    pub async fn set_food_recipe(&self, food_id: i32, recipe: Option<NamedRef>) -> Result<Food> {
+        let recipe = recipe
+            .map(|recipe| serde_json::json!({"id": recipe.id, "name": recipe.name}))
             .unwrap_or(serde_json::Value::Null);
         let updated = self
             .api_update(
@@ -2200,7 +2200,16 @@ mod tests {
         let mut client = TandoorClient::new(url);
         client.set_token("test-token".to_string());
 
-        client.set_food_recipe(5, Some(12)).await.unwrap();
+        client
+            .set_food_recipe(
+                5,
+                Some(NamedRef {
+                    id: 12,
+                    name: "Sauce".to_string(),
+                }),
+            )
+            .await
+            .unwrap();
         client
             .set_related_recipe_mealplan_inclusion(true)
             .await
@@ -2208,7 +2217,7 @@ mod tests {
 
         let requests = requests.await.unwrap();
         assert!(requests[0].starts_with("PATCH /api/food/5/ "));
-        assert!(requests[0].contains(r#""recipe":{"id":12}"#));
+        assert!(requests[0].contains(r#""recipe":{"id":12,"name":"Sauce"}"#));
         assert!(requests[1].starts_with("GET /api/user-preference/?page_size=100 "));
         assert!(requests[2].starts_with("PATCH /api/user-preference/7/ "));
         assert!(requests[2].contains(r#""mealplan_autoinclude_related":true"#));

@@ -5171,7 +5171,16 @@ impl TandoorMcpServer {
                 ),
             );
         }
-        if let Err(e) = client.set_food_recipe(food.id, Some(target.id)).await {
+        if let Err(e) = client
+            .set_food_recipe(
+                food.id,
+                Some(crate::client::types::NamedRef {
+                    id: target.id,
+                    name: target.name.clone(),
+                }),
+            )
+            .await
+        {
             return tool_err("Failed to link food recipe", e);
         }
         tool_ok(json!({
