@@ -187,12 +187,21 @@ curl -X GET http://your-tandoor-url/api/keyword/ \
 | `BIND_ADDR`          | Address and port for the MCP server                       | `127.0.0.1:3001`         |
 | `MCP_ALLOWED_HOSTS`   | Hosts accepted by DNS-rebinding protection                | Loopback hosts           |
 | `MCP_ALLOWED_ORIGINS` | Exact browser origins allowed to call `/mcp`              | —                        |
+| `S3_BUCKET`           | Private bucket for generated recipe thumbnails             | Disabled                 |
+| `S3_REGION`           | S3 bucket region                                            | `us-east-1`              |
+| `S3_ENDPOINT`         | Optional S3-compatible internal endpoint                   | AWS                      |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | Thumbnail-only credentials                 | —                        |
+| `S3_PUBLIC_BASE_URL`  | Optional browser-visible endpoint used for signed URLs/CSP | Derived                  |
+| `THUMBNAIL_URL_TTL_SECS` | Presigned thumbnail URL lifetime                       | `86400`                  |
+| `THUMBNAIL_MAX_EDGE`  | Generated JPEG longest edge                                | `512`                    |
 | `RUST_LOG`           | Log level (`info`, `debug`, `trace`, …)                   | `info`                   |
 
 `TANDOOR_AUTH_TOKEN` is strongly preferred. Tandoor limits the `/api-token-auth/` login endpoint to **10 requests per day per IP**; a token bypasses this entirely.
 
 The Compose deployment adds `mcp-tandoor` to `MCP_ALLOWED_HOSTS` so the tunnel
 sidecar can use the private service name without disabling host validation.
+See [S3 thumbnails and inline recipe gallery](docs/thumbnails.md) for AWS IAM,
+lifecycle, security, and local MinIO setup.
 
 ### Getting a Tandoor API token
 
@@ -208,7 +217,9 @@ curl -X POST http://your-tandoor/api-token-auth/ \
 ### Recipe Management
 
 - `search_recipes` — Search for recipes with flexible querying (keywords, foods, cooking time, rating, random). Each result includes a clickable `recipe_url` and shows `has_photo`; `has_photo: false` lists recipes missing a photo
-- `get_recipe_details` — Get comprehensive recipe information, a clickable `recipe_url`, and the authoritative Tandoor photo as an attached MCP image when available (including presigned Amazon S3 images). `steps` lists each step (`step_number`, instruction, time) with the ingredients used in that step; `ingredients` is the full list for the whole recipe, tagged by step. Amounts scale with `servings`
+- `get_recipe_details` — Get comprehensive recipe information and an authoritative thumbnail by default; use `image: "original"` only for full resolution or `image: "none"` to omit it. Amounts scale with `servings`
+- `get_recipe_gallery` — Render 1–24 authoritative recipe thumbnails in an inline MCP Apps gallery (requires the S3 thumbnail cache)
+- `get_recipe_image` — Return one authoritative thumbnail or explicitly requested original MCP image
 - `create_recipe` — Create a new recipe. Use `steps` to add structured steps, each with its own ingredients (food, unit, amount, note; omit `amount` for to-taste ingredients; `{"header": "For the sauce"}` adds a section heading) — the legacy `instructions` field creates a single step with no ingredients
 - `update_recipe` — Update an existing recipe; only what you pass changes. Steps (by `step_number` from `get_recipe_details`, numbered as before the call): `step_updates` edits specific steps — instruction/name/time, and that step's ingredients via `add_ingredients`, `remove_ingredients`, `update_ingredients` (change amount/unit/note/food in place) or `replace_ingredients`; `add_steps` inserts steps (`after_step`), `move_steps` reorders, `remove_steps` deletes. Keywords: `add_keywords` / `remove_keywords` by name. `replace_all_steps` and `replace_all_keywords` are **full replacements** (old names `steps` / `keywords` still accepted). Returns the resulting steps
 - `set_recipe_image` — Set a recipe's photo from a public HTTPS JPEG, PNG, WebP, or GIF URL; private/reserved hosts are rejected and downloads are streamed through a 20 MB limit
@@ -265,6 +276,7 @@ Items are referred to by food name (e.g. `"lemons"`, plurals match) or entry ID;
 ### Meal Planning
 
 - `get_meal_plans` — Get meal plans for a date range
+- `get_meal_plan_gallery` — Render up to 31 meal-plan entries as polished cards with authoritative recipe photos, tags, descriptions, notes, timing, and servings
 - `create_meal_plan` — Create a new meal plan
 - `update_meal_plan` — Update fields on an existing meal plan (recipe, title, servings, date, meal_type, note) without deleting and recreating it
 - `delete_meal_plan` — Delete a meal plan

@@ -25,5 +25,6 @@
 # Local secrets / tunnel config
 .env
 .env.*
+!.env.example
 
 tandoor/

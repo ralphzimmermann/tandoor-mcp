@@ -13,10 +13,16 @@
 //! - `BIND_ADDR`: Address to bind the MCP server (default: 127.0.0.1:3001)
 //! - `MCP_ALLOWED_HOSTS`: Comma-separated hosts accepted by DNS-rebinding protection
 //! - `MCP_ALLOWED_ORIGINS`: Comma-separated browser origins allowed to call `/mcp`
+//! - `S3_BUCKET`: Private bucket used for generated thumbnails (unset disables galleries)
+//! - `S3_REGION`, `S3_ENDPOINT`: S3 region and optional S3-compatible endpoint
+//! - `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: Least-privilege thumbnail credentials
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
 
-use mcp_tandoor::{mcp_router, server::TandoorMcpServer};
-use std::{env, net::SocketAddr};
+use mcp_tandoor::{
+    config::ThumbnailConfig, mcp_router, server::TandoorMcpServer, storage::S3ThumbnailStore,
+    thumbnail_service::ThumbnailService,
+};
+use std::{env, net::SocketAddr, sync::Arc};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -53,11 +59,28 @@ async fn main() -> anyhow::Result<()> {
 
     // Test authentication and validate token
     tracing::info!("Validating Tandoor credentials...");
-    let test_server = TandoorMcpServer::new_with_credentials(
+    let mut test_server = TandoorMcpServer::new_with_credentials(
         base_url.clone(),
         username.clone(),
         password.clone(),
     );
+
+    if let Some(config) = ThumbnailConfig::from_env()? {
+        let resource_origin = config.resource_origin()?;
+        let store = S3ThumbnailStore::new(&config).await?;
+        if let Err(error) = store.check_bucket(&config.prefix).await {
+            tracing::warn!(%error, "Thumbnail bucket startup check failed; gallery calls may fail");
+        } else {
+            tracing::info!(bucket = %config.bucket, "Thumbnail bucket is accessible");
+        }
+        test_server = test_server.with_thumbnails(Arc::new(ThumbnailService::new(
+            Arc::new(store),
+            &config,
+            resource_origin,
+        )));
+    } else {
+        tracing::info!("S3_BUCKET is unset; inline recipe galleries are disabled");
+    }
 
     // Compose expands an unset optional variable to an empty string. Treat blank
     // secrets as absent so username/password authentication remains available.

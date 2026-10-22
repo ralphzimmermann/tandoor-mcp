@@ -35,10 +35,14 @@
 //! ```
 
 pub mod client;
+pub mod config;
 mod domain;
 pub mod http;
 mod image;
 pub mod server;
+pub mod storage;
+pub mod thumbnail;
+pub mod thumbnail_service;
 
 pub use client::TandoorClient;
 pub use http::mcp_router;
