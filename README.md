@@ -185,10 +185,14 @@ curl -X GET http://your-tandoor-url/api/keyword/ \
 | `TANDOOR_USERNAME`   | Username (only used when `TANDOOR_AUTH_TOKEN` is not set) | `admin`                  |
 | `TANDOOR_PASSWORD`   | Password (only used when `TANDOOR_AUTH_TOKEN` is not set) | `admin`                  |
 | `BIND_ADDR`          | Address and port for the MCP server                       | `127.0.0.1:3001`         |
-| `MCP_ALLOWED_ORIGINS` | Exact browser origins allowed to call `/mcp`             | —                        |
+| `MCP_ALLOWED_HOSTS`   | Hosts accepted by DNS-rebinding protection                | Loopback hosts           |
+| `MCP_ALLOWED_ORIGINS` | Exact browser origins allowed to call `/mcp`              | —                        |
 | `RUST_LOG`           | Log level (`info`, `debug`, `trace`, …)                   | `info`                   |
 
 `TANDOOR_AUTH_TOKEN` is strongly preferred. Tandoor limits the `/api-token-auth/` login endpoint to **10 requests per day per IP**; a token bypasses this entirely.
+
+The Compose deployment adds `mcp-tandoor` to `MCP_ALLOWED_HOSTS` so the tunnel
+sidecar can use the private service name without disabling host validation.
 
 ### Getting a Tandoor API token
 

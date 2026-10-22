@@ -33,6 +33,9 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
 - `TANDOOR_PASSWORD`: password for that account; default `admin`.
 - `TANDOOR_AUTH_TOKEN`: reusable Tandoor token supported by the server API.
 - `BIND_ADDR`: listen address; default `127.0.0.1:3001`.
+- `MCP_ALLOWED_HOSTS`: comma-separated hosts accepted by the transport's
+  DNS-rebinding protection; defaults to loopback hosts. The Compose deployment
+  also allows its `mcp-tandoor` service name.
 - `MCP_ALLOWED_ORIGINS`: comma-separated exact browser Origin values. With an
   empty value, requests that include `Origin` are rejected; non-browser MCP
   clients normally omit it.

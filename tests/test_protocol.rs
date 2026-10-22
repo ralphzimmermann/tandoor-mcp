@@ -22,7 +22,11 @@ async fn spawn_server() -> (Client, String, tokio::task::JoinHandle<()>) {
     let address = listener
         .local_addr()
         .expect("test listener should have an address");
-    let router = mcp_router(server, Vec::new());
+    let router = mcp_router(
+        server,
+        vec!["localhost".to_string(), "127.0.0.1".to_string()],
+        Vec::new(),
+    );
     let task = tokio::spawn(async move {
         axum::serve(listener, router)
             .await

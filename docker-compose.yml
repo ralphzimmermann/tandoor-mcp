@@ -14,6 +14,9 @@ services:
       TANDOOR_USERNAME: ${TANDOOR_USERNAME:-admin}
       TANDOOR_PASSWORD: ${TANDOOR_PASSWORD:-admin}
       BIND_ADDR: 0.0.0.0:3001
+      # Keep rmcp's DNS-rebinding protection enabled while permitting the
+      # tunnel sidecar to address this service by its Compose DNS name.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,::1,mcp-tandoor}
       MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
       RUST_LOG: ${RUST_LOG:-info}
     expose:

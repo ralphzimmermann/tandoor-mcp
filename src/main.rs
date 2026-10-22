@@ -11,6 +11,7 @@
 //! - `TANDOOR_USERNAME`: Tandoor username for authentication (default: admin)  
 //! - `TANDOOR_PASSWORD`: Tandoor password for authentication (default: admin)
 //! - `BIND_ADDR`: Address to bind the MCP server (default: 127.0.0.1:3001)
+//! - `MCP_ALLOWED_HOSTS`: Comma-separated hosts accepted by DNS-rebinding protection
 //! - `MCP_ALLOWED_ORIGINS`: Comma-separated browser origins allowed to call `/mcp`
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
 
@@ -35,6 +36,13 @@ async fn main() -> anyhow::Result<()> {
     let password = env::var("TANDOOR_PASSWORD").unwrap_or_else(|_| "admin".to_string());
 
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
+    let allowed_hosts = env::var("MCP_ALLOWED_HOSTS")
+        .unwrap_or_else(|_| "localhost,127.0.0.1,::1".to_string())
+        .split(',')
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(str::to_owned)
+        .collect();
     let allowed_origins = env::var("MCP_ALLOWED_ORIGINS")
         .unwrap_or_default()
         .split(',')
@@ -93,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
     let bind: SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let local_addr = listener.local_addr()?;
-    let app = mcp_router(test_server, allowed_origins);
+    let app = mcp_router(test_server, allowed_hosts, allowed_origins);
 
     tracing::info!("Tandoor MCP Server listening on http://{local_addr}/mcp");
     axum::serve(listener, app)

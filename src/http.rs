@@ -22,11 +22,20 @@ use crate::server::TandoorMcpServer;
 
 /// Build the application router with the MCP service mounted at `POST /mcp`.
 ///
+/// `allowed_hosts` contains hostnames or `host:port` authorities accepted by
+/// rmcp's DNS-rebinding protection.
+///
 /// `allowed_origins` contains exact serialized Origin values. Requests without
 /// an Origin header are accepted because non-browser MCP clients, including
 /// ChatGPT's connector, normally omit it.
-pub fn mcp_router(server: TandoorMcpServer, allowed_origins: Vec<String>) -> Router {
-    let config = StreamableHttpServerConfig::default().with_json_response(true);
+pub fn mcp_router(
+    server: TandoorMcpServer,
+    allowed_hosts: Vec<String>,
+    allowed_origins: Vec<String>,
+) -> Router {
+    let config = StreamableHttpServerConfig::default()
+        .with_json_response(true)
+        .with_allowed_hosts(allowed_hosts);
     let service: StreamableHttpService<TandoorMcpServer, LocalSessionManager> =
         StreamableHttpService::new(
             move || Ok(server.clone()),
