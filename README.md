@@ -284,7 +284,8 @@ Items are referred to by food name (e.g. `"lemons"`, plurals match) or entry ID;
 
 ### Metadata
 
-- `get_keywords` — Get all available recipe keywords/tags
+- `get_keywords` — Get all available recipe keywords/tags across every API page
+  (see [MCP tool behavior](docs/mcp.md#keyword-listing))
 - `get_units` — Get available measurement units
 
 ### Cooking History
