@@ -1,4 +1,45 @@
 services:
+  # Production-style ChatGPT deployment. These services are behind a profile so
+  # the local Tandoor integration-test stack below remains unchanged.
+  mcp-tandoor:
+    profiles:
+      - chatgpt
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      TANDOOR_BASE_URL: ${TANDOOR_BASE_URL:?Set TANDOOR_BASE_URL in .env}
+      TANDOOR_AUTH_TOKEN: ${TANDOOR_AUTH_TOKEN:-}
+      TANDOOR_USERNAME: ${TANDOOR_USERNAME:-admin}
+      TANDOOR_PASSWORD: ${TANDOOR_PASSWORD:-admin}
+      BIND_ADDR: 0.0.0.0:3001
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    expose:
+      - "3001"
+    networks:
+      - default
+
+  # OpenAI recommends running tunnel-client beside the private MCP server.
+  # The Compose service name is required here: 127.0.0.1 would refer to this
+  # sidecar itself, not to mcp-tandoor.
+  tunnel-client:
+    profiles:
+      - chatgpt
+    image: ghcr.io/openai/tunnel-client:v0.0.17
+    restart: unless-stopped
+    depends_on:
+      - mcp-tandoor
+    environment:
+      CONTROL_PLANE_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      CONTROL_PLANE_TUNNEL_ID: ${CONTROL_PLANE_TUNNEL_ID:?Set CONTROL_PLANE_TUNNEL_ID in .env}
+      MCP_SERVER_URL: http://mcp-tandoor:3001/mcp
+      LOG_LEVEL: ${TUNNEL_LOG_LEVEL:-info}
+      LOG_FORMAT: json
+    networks:
+      - default
+
   db_recipes:
     restart: always
     image: postgres:16-alpine
@@ -22,7 +63,7 @@ services:
     networks:
       - default
     ports:
-      - "8080:8080"
+      - "${TANDOOR_TEST_PORT:-8080}:80"
 
 networks:
   default:

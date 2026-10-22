@@ -22,6 +22,7 @@ use reqwest::Client;
 ///
 /// Tandoor uses OAuth2 access tokens with the format `tda_xxxxxxxx_xxxx_xxxx_xxxx_xxxxxxxxxxxx`.
 /// These tokens are used with `Bearer` authentication in API requests.
+#[derive(Clone)]
 pub struct TandoorAuth {
     /// Base URL of the Tandoor server
     base_url: String,
@@ -91,18 +92,14 @@ impl TandoorAuth {
                     "Tandoor API endpoint not found. Check your base URL: {}",
                     self.base_url
                 ),
-                500..=599 => anyhow::bail!("Tandoor server error ({}): {}", status, error_body),
-                _ => anyhow::bail!(
-                    "Authentication failed with status {}: {}",
-                    status,
-                    error_body
-                ),
+                500..=599 => anyhow::bail!("Tandoor server error ({status}): {error_body}"),
+                _ => anyhow::bail!("Authentication failed with status {status}: {error_body}"),
             }
         }
 
         let auth_token: AuthToken = response.json().await.map_err(|e| {
             tracing::error!("Failed to parse authentication response: {}", e);
-            anyhow::anyhow!("Invalid response from Tandoor server: {}", e)
+            anyhow::anyhow!("Invalid response from Tandoor server: {e}")
         })?;
 
         self.token = Some(auth_token.token.clone());

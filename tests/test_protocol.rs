@@ -6,6 +6,7 @@
 use mcp_tandoor::{mcp_router, TandoorMcpServer};
 use reqwest::{Client, Response};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 const MODERN_VERSION: &str = "2026-07-28";
 
@@ -126,7 +127,73 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     let second_tools = second["result"]["tools"]
         .as_array()
         .expect("tools/list should return tools");
-    assert_eq!(first_tools.len(), 18);
+    let expected: BTreeSet<_> = [
+        "search_recipes",
+        "get_recipe_details",
+        "create_recipe",
+        "import_recipe_from_url",
+        "update_recipe",
+        "set_recipe_image",
+        "remove_recipe_image",
+        "delete_recipe",
+        "get_recipe_books",
+        "create_recipe_book",
+        "update_recipe_book",
+        "delete_recipe_book",
+        "add_to_recipe_book",
+        "remove_from_recipe_book",
+        "get_recipe_book_entries",
+        "add_to_shopping_list",
+        "get_shopping_list",
+        "update_shopping_list_item",
+        "check_shopping_items",
+        "remove_from_shopping_list",
+        "clear_shopping_list",
+        "add_recipe_to_shopping_list",
+        "add_meal_plan_to_shopping_list",
+        "get_shopping_list_recipes",
+        "update_shopping_list_recipe",
+        "remove_recipe_from_shopping_list",
+        "get_shopping_lists",
+        "create_shopping_list",
+        "update_shopping_list",
+        "delete_shopping_list",
+        "get_supermarkets",
+        "create_supermarket",
+        "update_supermarket",
+        "delete_supermarket",
+        "get_supermarket_categories",
+        "create_supermarket_category",
+        "update_supermarket_category",
+        "delete_supermarket_category",
+        "set_food_category",
+        "search_foods",
+        "update_pantry",
+        "find_duplicate_foods",
+        "merge_foods",
+        "suggest_from_inventory",
+        "get_unit_conversions",
+        "get_meal_plans",
+        "create_meal_plan",
+        "update_meal_plan",
+        "delete_meal_plan",
+        "get_meal_types",
+        "get_keywords",
+        "get_units",
+        "get_cook_log",
+        "log_cooked_recipe",
+    ]
+    .into_iter()
+    .collect();
+    let actual: BTreeSet<_> = first_tools
+        .iter()
+        .map(|tool| {
+            tool["name"]
+                .as_str()
+                .expect("every tool should have a name")
+        })
+        .collect();
+    assert_eq!(actual, expected);
     assert_eq!(
         first_tools, second_tools,
         "tool order must be deterministic"
@@ -143,6 +210,8 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     assert_eq!(annotation("create_recipe")["destructiveHint"], false);
     assert_eq!(annotation("delete_meal_plan")["destructiveHint"], true);
     assert_eq!(annotation("update_pantry")["idempotentHint"], true);
+    assert_eq!(annotation("merge_foods")["destructiveHint"], true);
+    assert_eq!(annotation("get_recipe_books")["readOnlyHint"], true);
 
     let call = modern_post(
         &client,

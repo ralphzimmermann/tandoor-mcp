@@ -11,18 +11,27 @@ A Model Context Protocol (MCP) server for [Tandoor Recipes](https://tandoor.dev)
 - **Keywords & Tags**: Organize recipes with keywords and categories
 - **Cooking Logs**: Track cooking history and ratings
 
+## Transport
+
+This server uses the **Streamable HTTP** MCP transport. The MCP endpoint is `/mcp` (not `/sse`). Streamable HTTP is required for Claude custom connectors — legacy SSE triggers an OAuth discovery probe that Claude cannot satisfy.
+
 ## Quick Start
 
 1. **Clone the repository**:
 
 ```bash
-git clone https://github.com/your-repo/mcp-tandoor
-cd mcp-tandoor
+git clone https://github.com/ralphzimmermann/tandoor-mcp
+cd tandoor-mcp
 ```
 
 2. **Configure environment variables**:
 
 ```bash
+# Preferred: use a pre-existing API token (avoids the 10-req/day login rate limit)
+export TANDOOR_BASE_URL="http://localhost:8080"
+export TANDOOR_AUTH_TOKEN="tda_your_token_here"
+
+# Alternative: username/password (subject to Tandoor rate limiting)
 export TANDOOR_BASE_URL="http://localhost:8080"
 export TANDOOR_USERNAME="admin"
 export TANDOOR_PASSWORD="your-password"
@@ -30,15 +39,49 @@ export TANDOOR_PASSWORD="your-password"
 
 3. **Run the server**:
 
-rustup is recommended:
-
 ```bash
 cargo run
+# Listens at 127.0.0.1:3001 by default; MCP endpoint at /mcp
 ```
 
 The MCP Streamable HTTP endpoint is `http://127.0.0.1:3001/mcp`. See
 [MCP transport and ChatGPT](docs/mcp.md) for discovery checks, deployment
 security, and ChatGPT setup.
+
+## Docker
+
+```bash
+docker run -d \
+  -e TANDOOR_BASE_URL="http://your-tandoor:8080" \
+  -e TANDOOR_AUTH_TOKEN="tda_your_token_here" \
+  -e BIND_ADDR="0.0.0.0:3001" \
+  -p 3001:3001 \
+  ghcr.io/ralphzimmermann/tandoor-mcp:latest
+```
+
+To connect the private server to ChatGPT through OpenAI Secure MCP Tunnel, set
+the Tandoor and tunnel credentials in `.env`, then run:
+
+```bash
+docker compose --profile chatgpt up -d tunnel-client
+```
+
+This starts the MCP server and the pinned official tunnel sidecar without
+publishing the MCP port. See [MCP transport and ChatGPT](docs/mcp.md) for the
+required variables, permissions, logs, and ChatGPT setup.
+
+## Adding to Claude as a Custom Connector
+
+1. In Claude settings, go to **Integrations → Custom connectors → Add custom connector**
+2. Set the URL to your server's `/mcp` endpoint:
+   ```
+   https://tandoor-mcp.example.com/mcp
+   ```
+3. No OAuth Client ID is needed — Streamable HTTP doesn't trigger OAuth probes.
+
+The MCP endpoint does not authenticate callers. Keep it on a private network or
+put it behind an authenticated HTTPS proxy; a query parameter alone is not an
+adequate access-control boundary.
 
 ## Tandoor Configuration
 
@@ -83,22 +126,18 @@ security, and ChatGPT setup.
 
 ### Method 2: Command Line Setup
 
-If you prefer command line or don't have web admin access:
-
 ```bash
-# Enter your Tandoor container
 docker exec -it your-tandoor-container /opt/recipes/venv/bin/python manage.py shell
+```
 
-# Run this Python code:
+```python
 from cookbook.models import Space, UserSpace
 from django.contrib.auth.models import User, Group
 
-# Get your admin user (replace 'admin' with your username)
 admin_user = User.objects.get(username='admin')
 
-# Create a space
 space, created = Space.objects.get_or_create(
-    name='Production',  # Choose your space name
+    name='Production',
     defaults={
         'created_by': admin_user,
         'max_recipes': 0,
@@ -108,26 +147,21 @@ space, created = Space.objects.get_or_create(
     }
 )
 
-# Associate user with space
 user_space, created = UserSpace.objects.get_or_create(
     user=admin_user,
     space=space,
     defaults={'active': True}
 )
 
-# Ensure it's active if it already existed
 if not created and not user_space.active:
     user_space.active = True
     user_space.save()
 
-# Add user to admin group in this space
 admin_group = Group.objects.get(name='admin')
 user_space.groups.add(admin_group)
 ```
 
 ### Verification
-
-Test that your setup is working:
 
 ```bash
 # Get an API token
@@ -140,118 +174,125 @@ curl -X GET http://your-tandoor-url/api/keyword/ \
   -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
 
-You should get a JSON response with keywords
-
 ## Configuration
 
 ### Environment Variables
 
-| Variable           | Description                         | Default                 |
-| ------------------ | ----------------------------------- | ----------------------- |
-| `TANDOOR_BASE_URL` | Full URL to your Tandoor instance   | `http://localhost:8080` |
-| `TANDOOR_USERNAME` | Username for Tandoor authentication | `admin`                 |
-| `TANDOOR_PASSWORD` | Password for Tandoor authentication | `admin`                 |
-| `TANDOOR_AUTH_TOKEN` | Existing token that avoids authentication rate limits | unset |
-| `BIND_ADDR`        | Address and port for the MCP server | `127.0.0.1:3001`        |
-| `MCP_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call `/mcp` | unset |
+| Variable             | Description                                               | Default                  |
+| -------------------- | --------------------------------------------------------- | ------------------------ |
+| `TANDOOR_BASE_URL`   | Full browser-accessible URL to your Tandoor instance      | `http://localhost:8080`  |
+| `TANDOOR_AUTH_TOKEN` | Pre-existing Tandoor API token (**preferred**)            | —                        |
+| `TANDOOR_USERNAME`   | Username (only used when `TANDOOR_AUTH_TOKEN` is not set) | `admin`                  |
+| `TANDOOR_PASSWORD`   | Password (only used when `TANDOOR_AUTH_TOKEN` is not set) | `admin`                  |
+| `BIND_ADDR`          | Address and port for the MCP server                       | `127.0.0.1:3001`         |
+| `MCP_ALLOWED_ORIGINS` | Exact browser origins allowed to call `/mcp`             | —                        |
+| `RUST_LOG`           | Log level (`info`, `debug`, `trace`, …)                   | `info`                   |
 
-### Runtime Configuration
+`TANDOOR_AUTH_TOKEN` is strongly preferred. Tandoor limits the `/api-token-auth/` login endpoint to **10 requests per day per IP**; a token bypasses this entirely.
+
+### Getting a Tandoor API token
 
 ```bash
-# Example with custom configuration
-TANDOOR_BASE_URL="https://recipes.mycompany.com" \
-TANDOOR_USERNAME="api-user" \
-TANDOOR_PASSWORD="secure-password" \
-BIND_ADDR="0.0.0.0:8000" \
-cargo run
+curl -X POST http://your-tandoor/api-token-auth/ \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"your-password"}'
+# → {"token": "tda_..."}
 ```
 
 ## Available Tools
 
-The MCP server provides the following tools:
-
 ### Recipe Management
 
-- `search_recipes` - Search for recipes with flexible querying
-- `get_recipe_details` - Get comprehensive recipe information with scaled ingredients
-- `create_recipe` - Create a new recipe
+- `search_recipes` — Search for recipes with flexible querying (keywords, foods, cooking time, rating, random). Each result includes a clickable `recipe_url` and shows `has_photo`; `has_photo: false` lists recipes missing a photo
+- `get_recipe_details` — Get comprehensive recipe information, a clickable `recipe_url`, and the authoritative Tandoor photo as an attached MCP image when available (including presigned Amazon S3 images). `steps` lists each step (`step_number`, instruction, time) with the ingredients used in that step; `ingredients` is the full list for the whole recipe, tagged by step. Amounts scale with `servings`
+- `create_recipe` — Create a new recipe. Use `steps` to add structured steps, each with its own ingredients (food, unit, amount, note; omit `amount` for to-taste ingredients; `{"header": "For the sauce"}` adds a section heading) — the legacy `instructions` field creates a single step with no ingredients
+- `update_recipe` — Update an existing recipe; only what you pass changes. Steps (by `step_number` from `get_recipe_details`, numbered as before the call): `step_updates` edits specific steps — instruction/name/time, and that step's ingredients via `add_ingredients`, `remove_ingredients`, `update_ingredients` (change amount/unit/note/food in place) or `replace_ingredients`; `add_steps` inserts steps (`after_step`), `move_steps` reorders, `remove_steps` deletes. Keywords: `add_keywords` / `remove_keywords` by name. `replace_all_steps` and `replace_all_keywords` are **full replacements** (old names `steps` / `keywords` still accepted). Returns the resulting steps
+- `set_recipe_image` — Set a recipe's photo from a public HTTPS JPEG, PNG, WebP, or GIF URL; private/reserved hosts are rejected and downloads are streamed through a 20 MB limit
+- `remove_recipe_image` — Remove a recipe's photo
+- `delete_recipe` — Delete a recipe permanently
+- `import_recipe_from_url` — Import a recipe from an external URL
+
+### Recipe Books
+
+- `get_recipe_books` — List all recipe books/collections, optionally filtered by name
+- `create_recipe_book` — Create a new recipe book/collection
+- `update_recipe_book` — Rename or update the description of a recipe book/collection
+- `delete_recipe_book` — Delete a recipe book/collection by ID
+- `add_to_recipe_book` — Add a recipe to a recipe book
+- `remove_from_recipe_book` — Remove a recipe from a recipe book by entry ID
+- `get_recipe_book_entries` — List which recipes are in which recipe books
 
 ### Shopping Lists
 
-- `add_to_shopping_list` - Add items to shopping list with intelligent consolidation
-- `get_shopping_list` - Get current shopping list organized by store section
-- `check_shopping_items` - Mark shopping list items as checked/purchased
-- `clear_shopping_list` - Clear checked items from shopping list and update pantry
+Items are referred to by food name (e.g. `"lemons"`, plurals match) or entry ID; lists, stores, and categories by name or ID.
 
+**Items**
+- `add_to_shopping_list` — Add items in plain words: `["3 lemons", "2 lb chicken thighs", "milk", "a dozen eggs"]`. Units map to existing ones, new foods are created, and an existing line for the same food/unit is increased instead of duplicated. Optional `shopping_list` puts them on a named list
+- `get_shopping_list` — The whole list with each item's category, named lists, and whether it came from a recipe; optional `shopping_list` filter
+- `update_shopping_list_item` — Change one item's amount, unit, food, checked status, or named lists
+- `check_shopping_items` — Check off items by name or ID (`checked: false` unchecks)
+- `remove_from_shopping_list` — Remove items without checking them off
+- `clear_shopping_list` — Clear checked items and mark them on hand in the pantry
+
+**Recipes on the list**
+- `add_recipe_to_shopping_list` — Add a recipe's ingredients, scaled to `servings` and linked to the recipe, skipping foods on hand
+- `add_meal_plan_to_shopping_list` — Add ingredients for meal plans in a date range as linked groups, skipping foods on hand
+- `get_shopping_list_recipes` — Recipes/meal plans on the list with servings and their items
+- `update_shopping_list_recipe` — Change a recipe's servings; its items are rescaled
+- `remove_recipe_from_shopping_list` — Remove a recipe and the items it added (manually added items stay)
+
+**Named lists** (e.g. "Costco", "Party")
+- `get_shopping_lists`, `create_shopping_list`, `update_shopping_list` (name/description/color), `delete_shopping_list` (items stay on the main list)
+
+**Stores and aisles**
+- `get_supermarkets` — Stores with their aisle order (optional `query`)
+- `create_supermarket` / `update_supermarket` — Name, description, and `category_order` (the full walking order of aisles; missing categories are created) / `delete_supermarket`
+- `get_supermarket_categories`, `create_supermarket_category`, `update_supermarket_category`, `delete_supermarket_category` — Aisles/sections such as Produce or Dairy
+- `set_food_category` — Put foods in an aisle so they group together on the list
 ### Food & Inventory
 
-- `search_foods` - Search for foods/ingredients with fuzzy name matching
-- `update_pantry` - Update pantry inventory status
-- `suggest_from_inventory` - Get recipe suggestions based on current inventory
+- `search_foods` — Search for foods/ingredients with fuzzy name matching
+- `update_pantry` — Mark foods on hand / not on hand (Tandoor tracks on-hand status, not quantities). Matches existing foods by exact name or plural (case-insensitive) and creates foods that don't exist yet when marked available (optional `supermarket_category`; disable with `create_missing: false`)
+- `find_duplicate_foods` — List foods that look like duplicates (same name apart from case, spacing, or a simple plural)
+- `merge_foods` — Merge one food into another by ID; recipes and shopping entries move to the target and the source food is **deleted**
+- `suggest_from_inventory` — Get recipe suggestions based on current inventory
+- `get_unit_conversions` — List unit conversions, optionally filtered by food ID
 
 ### Meal Planning
 
-- `get_meal_plans` - Get meal plans for a date range
-- `create_meal_plan` - Create a new meal plan
-- `delete_meal_plan` - Delete a meal plan
-- `get_meal_types` - Get available meal types
+- `get_meal_plans` — Get meal plans for a date range
+- `create_meal_plan` — Create a new meal plan
+- `update_meal_plan` — Update fields on an existing meal plan (recipe, title, servings, date, meal_type, note) without deleting and recreating it
+- `delete_meal_plan` — Delete a meal plan
+- `get_meal_types` — Get available meal types
 
 ### Metadata
 
-- `get_keywords` - Get all available recipe keywords/tags
-- `get_units` - Get available measurement units
+- `get_keywords` — Get all available recipe keywords/tags
+- `get_units` — Get available measurement units
 
 ### Cooking History
 
-- `get_cook_log` - Get cooking history
-- `log_cooked_recipe` - Log a cooked recipe
+- `get_cook_log` — Get cooking history
+- `log_cooked_recipe` — Log a cooked recipe
 
 ## Troubleshooting
 
+### "Couldn't register with Tandoor's sign-in service" (Claude connector)
+
+This happens when the connector URL points to a legacy SSE endpoint (`/sse`). Claude probes for OAuth and fails. Fix: use the Streamable HTTP endpoint (`/mcp`).
+
 ### "Authentication credentials were not provided"
 
-This indicates the OAuth2 token format is wrong. Ensure you're using:
-
-- `Authorization: Bearer YOUR_TOKEN`
-- Token from the `/api-token-auth/` endpoint
+The `Authorization: Bearer` header is missing or the token is invalid. Verify `TANDOOR_AUTH_TOKEN` is set and correct.
 
 ### "You do not have permission to perform this action"
 
-This is a Tandoor permissions issue:
+Tandoor permissions issue. Check that the user has an active `UserSpace` with an `admin` group assignment (see [Tandoor Configuration](#tandoor-configuration) above).
 
-1. **Check user is in a group**:
+### "Request was throttled" (429)
 
-```python
-user = User.objects.get(username='your-username')
-print(f"Groups: {[g.name for g in user.groups.all()]}")
-```
-
-2. **Check UserSpace is active**:
-
-```python
-user_spaces = UserSpace.objects.filter(user=user)
-for us in user_spaces:
-    print(f"Space: {us.space.name}, Active: {us.active}")
-```
-
-3. **Most common fix**:
-
-```python
-# Make sure UserSpace is active
-user_space = UserSpace.objects.get(user=user)
-user_space.active = True
-user_space.save()
-```
-
-### "Request was throttled"
-
-Tandoor has rate limiting. Wait before retrying, or check if you're making too many authentication requests. The MCP server implements shared authentication to prevent this.
-
-### Connection Refused / Network Errors
-
-- Verify `TANDOOR_BASE_URL` is correct and accessible
-- Check if Tandoor is running: `curl http://your-tandoor-url/`
-- Verify firewall/network configuration
+Tandoor limits authentication to 10 requests per day per IP. Switch to `TANDOOR_AUTH_TOKEN` to bypass it. If already throttled, wait until midnight UTC or restart Tandoor to reset the counter.
 
 ### Django Scopes Error
 
@@ -259,99 +300,71 @@ Tandoor has rate limiting. Wait before retrying, or check if you're making too m
 ScopeError: A scope on dimension(s) space needs to be active for this query
 ```
 
-This means the space scope isn't activated. Follow the Tandoor Configuration section above to fix permissions.
+The user has no active space. Follow the Tandoor Configuration section to set one up.
+
+### Connection Refused / Network Errors
+
+- Verify `TANDOOR_BASE_URL` is reachable from where the MCP server runs
+- Check if Tandoor is running: `curl http://your-tandoor-url/`
 
 ## Development
 
 ### Building from Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-repo/mcp-tandoor
-cd mcp-tandoor
-
-# Build in development mode
 cargo build
-
-# Run with debug logging
 RUST_LOG=debug cargo run
 ```
 
 ### Running Tests
 
-The project includes a comprehensive testing script that manages Docker services and runs integration tests:
+```bash
+# Unit tests — no network or Docker required
+cargo test --lib --test test_types --test test_api_shapes --test test_protocol
+
+# Integration tests — requires a live Tandoor instance
+TANDOOR_BASE_URL=http://localhost:8080 \
+TANDOOR_AUTH_TOKEN=tda_your_token \
+cargo test -- --test-threads=1
+```
+
+The integration test suite can also be driven through `./scripts/test.sh` which manages a Docker-based Tandoor instance:
 
 ```bash
-# Run full test suite (clean start, run tests, cleanup)
-./scripts/test.sh test
-
-# Keep services running after tests (for debugging)
+./scripts/test.sh test           # full run: up, test, down
 ./scripts/test.sh test --keep-running
-
-# Run tests with verbose output
-./scripts/test.sh test --verbose
-
-# Manual service management
-./scripts/test.sh up      # Start Tandoor services
-./scripts/test.sh down    # Stop services
-./scripts/test.sh reset   # Clean and restart services
-./scripts/test.sh clean   # Clean volumes only
-./scripts/test.sh logs    # View service logs
+./scripts/test.sh up / down / logs
 ```
 
-**Testing Requirements:**
-
-- Docker and Docker Compose installed
-- Ports 8080 (Tandoor) and 5432 (PostgreSQL) available
-- Sufficient disk space for Docker volumes
-
-**Note on Rate Limiting:** Tandoor limits authentication to 10 requests per day. The test script automatically obtains and shares a single token across all tests to avoid hitting this limit.
-
-## Rate Limiting Considerations
-
-Tandoor has extremely aggressive rate limiting on authentication endpoints:
-
-- **10 authentication requests per day per IP address**
-- Rate limit resets at midnight UTC or when Tandoor is restarted
-- Exceeding the limit returns `429 Too Many Requests`
-
-### Handling Rate Limits during Verification
-
-1. **Token Sharing**: Uses global token storage to share authentication across all tool calls
-2. **Environment Token**: Accepts `TANDOOR_AUTH_TOKEN` to bypass authentication entirely
-3. **Graceful Fallback**: Falls back to stored credentials if token expires
-
-### Best Practices
+Set `TANDOOR_TEST_PORT` when port 8080 is already in use:
 
 ```bash
-# Get a token once and reuse it
-TOKEN=$(curl -X POST http://localhost:8080/api-token-auth/ \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"your-password"}' | jq -r .token)
-
-# Use the token for all subsequent requests
-TANDOOR_AUTH_TOKEN="$TOKEN" cargo run
+TANDOOR_TEST_PORT=18080 ./scripts/test.sh test
 ```
 
-### Development Workflow
+**Testing requirements**: Docker + Docker Compose installed and the selected
+Tandoor test port reachable from the host.
 
-```bash
-# Start Tandoor and get a fresh token
-./scripts/test.sh up
-TOKEN=$(./scripts/get_token.sh admin testing1 http://localhost:8080)
+### CI
 
-# Use the token for development
-TANDOOR_AUTH_TOKEN="$TOKEN" cargo run
+GitHub Actions runs on every push and pull request:
 
-# When done for the day
-./scripts/test.sh down
-```
+| Job               | What it does                                                         |
+| ----------------- | -------------------------------------------------------------------- |
+| `unit-test`       | fmt, strict clippy, domain/API-shape/protocol tests (no Docker)       |
+| `integration-test`| spins up Postgres + Tandoor, creates a test user, runs all tests     |
+| `security`        | blocking `cargo audit` for known vulnerabilities                    |
+| `docker-build`    | builds the Docker image and verifies the MCP process starts          |
 
-### If You Hit the Rate Limit
+The `publish` workflow builds natively for `linux/amd64` and `linux/arm64`,
+combines the image manifests, and pushes to the repository's GHCR package on a
+`main` push or version tag.
 
-1. **Wait until midnight UTC** (rate limit resets)
-2. **Restart Tandoor** to reset the counter:
-   ```bash
-   docker restart your-tandoor-container
-   ```
-3. **Use an existing token** if you have one saved
+## Fork integration
+
+The expanded API coverage was adapted from
+[`ryanmac8/tandoor-mcp`](https://github.com/ryanmac8/tandoor-mcp) while retaining
+this repository's rmcp 3.6 transport, protocol discovery, origin validation,
+typed API compatibility, lockfile, and local-bind security defaults. See
+[`docs/fork-port.md`](docs/fork-port.md) for the source mapping and deliberate
+security deviations.

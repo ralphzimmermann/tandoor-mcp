@@ -11,7 +11,9 @@ NC='\033[0m' # No Color
 COMPOSE_FILE="docker-compose.yml"
 ENV_FILE=".env.dev"
 WAIT_TIME=30
-MAX_RETRIES=10
+# A clean Tandoor image can spend several minutes applying migrations.
+MAX_RETRIES="${MAX_RETRIES:-60}"
+TANDOOR_TEST_PORT="${TANDOOR_TEST_PORT:-8080}"
 
 # Parse command line arguments
 ACTION="${1:-test}"
@@ -100,7 +102,9 @@ start_services() {
     log_info "Waiting for services to be ready..."
     local retries=0
     while [ $retries -lt $MAX_RETRIES ]; do
-        if docker compose -f "$COMPOSE_FILE" exec -T web_recipes curl -sf http://localhost:8080/login/ > /dev/null 2>&1; then
+        # Current Tandoor images do not include curl, so probe through the
+        # published host port instead of executing a health check in-container.
+        if curl -sf "http://localhost:${TANDOOR_TEST_PORT}/login/" > /dev/null 2>&1; then
             log_success "Tandoor is ready!"
             return 0
         fi
@@ -181,7 +185,7 @@ run_tests() {
     log_info "Running integration tests..."
     
     # Set environment variables for the MCP server
-    export TANDOOR_BASE_URL="http://localhost:8080"
+    export TANDOOR_BASE_URL="http://localhost:${TANDOOR_TEST_PORT}"
     export TANDOOR_USERNAME="admin"
     export TANDOOR_PASSWORD="testing1"
     

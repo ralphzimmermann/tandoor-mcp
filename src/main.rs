@@ -7,20 +7,12 @@
 //! ## Environment Variables
 //!
 //! - `TANDOOR_BASE_URL`: Tandoor server URL (default: http://localhost:8080)
+//! - `TANDOOR_AUTH_TOKEN`: Existing API token (preferred; avoids login throttling)
 //! - `TANDOOR_USERNAME`: Tandoor username for authentication (default: admin)  
 //! - `TANDOOR_PASSWORD`: Tandoor password for authentication (default: admin)
 //! - `BIND_ADDR`: Address to bind the MCP server (default: 127.0.0.1:3001)
 //! - `MCP_ALLOWED_ORIGINS`: Comma-separated browser origins allowed to call `/mcp`
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
-//!
-//! ## Usage
-//!
-//! ```bash
-//! TANDOOR_BASE_URL=http://your-tandoor-server:8080 \
-//! TANDOOR_USERNAME=your_username \
-//! TANDOOR_PASSWORD=your_password \
-//! cargo run
-//! ```
 
 use mcp_tandoor::{mcp_router, server::TandoorMcpServer};
 use std::{env, net::SocketAddr};
@@ -28,7 +20,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -37,10 +28,8 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Get configuration from environment variables
     let base_url =
         env::var("TANDOOR_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-
     let username = env::var("TANDOOR_USERNAME").unwrap_or_else(|_| "admin".to_string());
 
     let password = env::var("TANDOOR_PASSWORD").unwrap_or_else(|_| "admin".to_string());

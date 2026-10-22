@@ -3,7 +3,10 @@
 //! These fixtures mirror current production payloads (nested `created_by`, meal-plan
 //! `from_date`/`to_date`, slim shopping-list foods) so serde stays compatible.
 
-use mcp_tandoor::client::types::{MealPlan, PaginatedResponse, Recipe, ShoppingListEntry};
+use mcp_tandoor::client::types::{
+    ApiNamedReference, CreateMealPlanRequest, MealPlan, PaginatedResponse, Recipe,
+    ShoppingListEntry,
+};
 
 #[test]
 fn recipe_search_accepts_nested_created_by() {
@@ -64,7 +67,7 @@ fn shopping_list_accepts_created_at_and_slim_food() {
     let parsed: ShoppingListEntry = serde_json::from_str(json).expect("shopping entry");
     assert_eq!(parsed.food.name, "Onion");
     assert!(!parsed.food.food_onhand);
-    assert_eq!(parsed.created_by.id(), 1);
+    assert_eq!(parsed.created_by.as_ref().map(|user| user.id()), Some(1));
 }
 
 #[test]
@@ -88,4 +91,36 @@ fn meal_plan_accepts_from_to_dates_and_recipe_summary() {
     assert_eq!(parsed.recipe.as_ref().unwrap().id, 1122);
     assert_eq!(parsed.primary_date_label(), "2026-10-11");
     assert_eq!(parsed.created_by.id(), 1);
+}
+
+#[test]
+fn meal_plan_create_serializes_nested_references() {
+    let date = "2026-10-22T12:00:00Z".parse().expect("valid date");
+    let request = CreateMealPlanRequest {
+        recipe: Some(ApiNamedReference {
+            id: 1284,
+            name: "Buckwheat Porridge GF".to_string(),
+        }),
+        title: None,
+        servings: 2.0,
+        from_date: date,
+        to_date: date,
+        meal_type: ApiNamedReference {
+            id: 10,
+            name: "Breakfast".to_string(),
+        },
+        note: None,
+    };
+
+    let serialized = serde_json::to_value(request).expect("serialize request");
+    assert_eq!(
+        serialized["recipe"],
+        serde_json::json!({"id": 1284, "name": "Buckwheat Porridge GF"})
+    );
+    assert_eq!(
+        serialized["meal_type"],
+        serde_json::json!({"id": 10, "name": "Breakfast"})
+    );
+    assert!(serialized.get("title").is_none());
+    assert!(serialized.get("note").is_none());
 }
