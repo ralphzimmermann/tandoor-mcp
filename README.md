@@ -227,6 +227,19 @@ curl -X POST http://your-tandoor/api-token-auth/ \
 - `delete_recipe` — Delete a recipe permanently
 - `import_recipe_from_url` — Parse an external URL, persist the resulting recipe, and import its image when available
 
+### Recipe Relations and Ingredient Structure
+
+- `find_unlinked_recipe_ingredients` — Find ingredients whose food name exactly matches an unlinked recipe; duplicate recipe names are returned as ambiguous
+- `link_step_recipe` / `unlink_step_recipe` — Embed or remove a related recipe on one specific parent step
+- `link_food_recipe` / `unlink_food_recipe` — Set or clear a global recipe link on a Food record; this affects every ingredient using that Food
+- `add_ingredient_header` — Insert a section heading such as “For the sauce” before a stable ingredient ID, or append it
+- `set_related_recipe_mealplan_inclusion` — Control whether the authenticated account includes related recipes in meal-plan shopping lists
+
+Call `find_unlinked_recipe_ingredients` before writing and let the user choose
+the scope: a step embed is local to one parent recipe, while a Food link is
+global. `get_recipe_details` returns the stable step, ingredient, and food IDs
+required for these tools. See [Recipe relations through MCP](docs/mcp.md).
+
 ### Recipe Books
 
 - `get_recipe_books` — List all recipe books/collections, optionally filtered by name

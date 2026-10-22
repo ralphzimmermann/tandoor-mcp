@@ -4,7 +4,7 @@
 //! correctly handle the API response shapes we've observed in the wild, including
 //! the `created_by` field that ships as a full user object rather than an integer.
 
-use mcp_tandoor::client::{PaginatedResponse, Recipe};
+use mcp_tandoor::client::{Food, PaginatedResponse, Recipe};
 
 // ── Recipe deserialization ────────────────────────────────────────────────────
 
@@ -79,6 +79,26 @@ fn recipe_created_by_absent() {
     let recipe: Recipe = serde_json::from_str(json).expect("should deserialize without field");
     assert_eq!(recipe.id, 4);
     assert!(recipe.created_by.is_none());
+}
+
+#[test]
+fn food_recipe_accepts_id_and_nested_summary() {
+    let by_id: Food = serde_json::from_value(serde_json::json!({
+        "id": 5,
+        "name": "Sauce",
+        "recipe": 12
+    }))
+    .expect("food recipe id");
+    assert_eq!(by_id.recipe.as_ref().unwrap().id(), 12);
+
+    let nested: Food = serde_json::from_value(serde_json::json!({
+        "id": 5,
+        "name": "Sauce",
+        "recipe": {"id": 12, "name": "Sauce"}
+    }))
+    .expect("nested food recipe");
+    assert_eq!(nested.recipe.as_ref().unwrap().id(), 12);
+    assert_eq!(nested.recipe.as_ref().unwrap().name(), Some("Sauce"));
 }
 
 // ── Keyword deserialization ───────────────────────────────────────────────────
