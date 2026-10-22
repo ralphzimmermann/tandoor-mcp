@@ -7,6 +7,7 @@ use reqwest::{
     redirect::Policy,
     Client, Url,
 };
+use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 const MAX_PAGINATION_PAGES: usize = 100;
@@ -114,12 +115,42 @@ impl TandoorClient {
     }
 
     // Recipe operations
-    /// Fetches a further page of recipe search results (a `next` URL from Tandoor).
-    pub async fn get_recipe_page(&self, url: &str) -> Result<PaginatedResponse<Recipe>> {
+    /// Resolve an API-provided pagination URL onto the configured Tandoor
+    /// origin. This supports reverse-proxy hostnames without ever forwarding
+    /// the API token to the authority supplied in a response body.
+    fn api_page_url(&self, page_url: &str) -> Result<Url> {
+        let mut base = Url::parse(&self.base_url).context("Invalid Tandoor base URL")?;
+        anyhow::ensure!(
+            matches!(base.scheme(), "http" | "https"),
+            "Tandoor base URL must use HTTP or HTTPS"
+        );
+        if !base.path().ends_with('/') {
+            let path = format!("{}/", base.path());
+            base.set_path(&path);
+        }
+        let supplied = match Url::parse(page_url) {
+            Ok(url) => url,
+            Err(_) => base.join(page_url).context("Invalid Tandoor page URL")?,
+        };
+        base.set_path(supplied.path());
+        base.set_query(supplied.query());
+        base.set_fragment(None);
+        Ok(base)
+    }
+
+    async fn get_paginated_page<T>(
+        &self,
+        page_url: &str,
+        resource: &str,
+    ) -> Result<PaginatedResponse<T>>
+    where
+        T: DeserializeOwned,
+    {
         let auth_header = self.get_auth_header()?;
+        let page_url = self.api_page_url(page_url)?;
         let response = self
             .client
-            .get(url)
+            .get(page_url)
             .header("Authorization", auth_header)
             .send()
             .await
@@ -127,9 +158,14 @@ impl TandoorClient {
         let status = response.status();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to search recipes: {status} - {error_body}");
+            anyhow::bail!("Failed to list {resource}: {status} - {error_body}");
         }
         Ok(response.json().await?)
+    }
+
+    /// Fetches a further page of recipe search results (a `next` URL from Tandoor).
+    pub async fn get_recipe_page(&self, url: &str) -> Result<PaginatedResponse<Recipe>> {
+        self.get_paginated_page(url, "recipes").await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -426,25 +462,17 @@ impl TandoorClient {
 
     /// Every food in the space, following pagination.
     pub async fn list_all_foods(&self) -> Result<Vec<Food>> {
-        let auth_header = self.get_auth_header()?;
         let mut url = Some(format!("{}/api/food/?page_size=100", self.base_url));
         let mut foods = Vec::new();
+        let mut pages = 0;
 
         while let Some(page_url) = url {
-            let response = self
-                .client
-                .get(&page_url)
-                .header("Authorization", &auth_header)
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to connect to Tandoor API: {e}"))?;
-
-            let status = response.status();
-            if !status.is_success() {
-                let error_body = response.text().await.unwrap_or_default();
-                anyhow::bail!("Failed to list foods: {status} - {error_body}");
-            }
-            let page: PaginatedResponse<Food> = response.json().await?;
+            pages += 1;
+            anyhow::ensure!(
+                pages <= MAX_PAGINATION_PAGES,
+                "Refusing to read more than {MAX_PAGINATION_PAGES} food pages"
+            );
+            let page: PaginatedResponse<Food> = self.get_paginated_page(&page_url, "foods").await?;
             foods.extend(page.results);
             url = page.next;
         }
@@ -796,9 +824,10 @@ impl TandoorClient {
                 pages <= MAX_PAGINATION_PAGES,
                 "Refusing to read more than {MAX_PAGINATION_PAGES} pages of {resource}"
             );
+            let page_url = self.api_page_url(&page_url)?;
             let response = self
                 .client
-                .get(&page_url)
+                .get(page_url)
                 .header("Authorization", &auth_header)
                 .send()
                 .await
@@ -896,7 +925,6 @@ impl TandoorClient {
 
     /// Every shopping list entry, following pagination.
     pub async fn get_all_shopping_entries(&self) -> Result<Vec<ShoppingListEntry>> {
-        let auth_header = self.get_auth_header()?;
         let mut url = Some(format!(
             "{}/api/shopping-list-entry/?page_size=100",
             self.base_url
@@ -910,23 +938,8 @@ impl TandoorClient {
                 pages <= MAX_PAGINATION_PAGES,
                 "Refusing to read more than {MAX_PAGINATION_PAGES} shopping-list pages"
             );
-            let response = self
-                .client
-                .get(&page_url)
-                .header("Authorization", &auth_header)
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to connect to Tandoor API: {e}"))?;
-
-            let status = response.status();
-            if !status.is_success() {
-                let error_body = response.text().await.unwrap_or_default();
-                anyhow::bail!("Failed to get shopping list: {status} - {error_body}");
-            }
-            let page: PaginatedResponse<ShoppingListEntry> = response
-                .json()
-                .await
-                .map_err(|e| anyhow::anyhow!("Invalid shopping list response: {e}"))?;
+            let page: PaginatedResponse<ShoppingListEntry> =
+                self.get_paginated_page(&page_url, "shopping list").await?;
             entries.extend(page.results);
             url = page.next;
         }
@@ -1126,6 +1139,32 @@ impl TandoorClient {
 
         tracing::debug!("Successfully retrieved {} meal plans", meal_plans.count);
         Ok(meal_plans)
+    }
+
+    /// Every meal plan in a requested date range, following pagination.
+    pub async fn get_all_meal_plans(
+        &self,
+        from_date: Option<&str>,
+        to_date: Option<&str>,
+    ) -> Result<Vec<MealPlan>> {
+        let first = self.get_meal_plans(from_date, to_date).await?;
+        let mut plans = first.results;
+        let mut next = first.next;
+        let mut pages = 1;
+
+        while let Some(page_url) = next {
+            anyhow::ensure!(
+                pages < MAX_PAGINATION_PAGES,
+                "Refusing to read more than {MAX_PAGINATION_PAGES} meal-plan pages"
+            );
+            let page: PaginatedResponse<MealPlan> =
+                self.get_paginated_page(&page_url, "meal plans").await?;
+            plans.extend(page.results);
+            next = page.next;
+            pages += 1;
+        }
+
+        Ok(plans)
     }
 
     pub async fn create_meal_plan(&self, request: CreateMealPlanRequest) -> Result<MealPlan> {
@@ -1905,6 +1944,15 @@ mod recipe_image_tests {
             client.recipe_url(1281),
             "https://recipes.thehealthwarriors.net/recipe/1281"
         );
+    }
+
+    #[test]
+    fn pagination_urls_are_rebased_onto_tandoor() {
+        let client = TandoorClient::new("http://tandoor:8080".to_string());
+        let page = client
+            .api_page_url("https://attacker.example/api/food/?page=2")
+            .unwrap();
+        assert_eq!(page.as_str(), "http://tandoor:8080/api/food/?page=2");
     }
 
     #[tokio::test]

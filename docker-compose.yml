@@ -9,7 +9,9 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      TANDOOR_BASE_URL: ${TANDOOR_BASE_URL:?Set TANDOOR_BASE_URL in .env}
+      # Defaults keep the non-profile integration-test stack usable without a
+      # tunnel .env; production ChatGPT deployments should set the public URL.
+      TANDOOR_BASE_URL: ${TANDOOR_BASE_URL:-http://web_recipes:80}
       TANDOOR_AUTH_TOKEN: ${TANDOOR_AUTH_TOKEN:-}
       TANDOOR_USERNAME: ${TANDOOR_USERNAME:-admin}
       TANDOOR_PASSWORD: ${TANDOOR_PASSWORD:-admin}
@@ -35,8 +37,8 @@ services:
     depends_on:
       - mcp-tandoor
     environment:
-      CONTROL_PLANE_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
-      CONTROL_PLANE_TUNNEL_ID: ${CONTROL_PLANE_TUNNEL_ID:?Set CONTROL_PLANE_TUNNEL_ID in .env}
+      CONTROL_PLANE_API_KEY: ${OPENAI_API_KEY:-}
+      CONTROL_PLANE_TUNNEL_ID: ${CONTROL_PLANE_TUNNEL_ID:-}
       MCP_SERVER_URL: http://mcp-tandoor:3001/mcp
       LOG_LEVEL: ${TUNNEL_LOG_LEVEL:-info}
       LOG_FORMAT: json

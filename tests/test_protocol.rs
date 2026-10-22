@@ -239,6 +239,15 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
 async fn transport_rejects_bad_origin_and_protocol_mismatch() {
     let (client, url, server_task) = spawn_server().await;
 
+    let bad_host = client
+        .post(&url)
+        .header("Host", "evil.example")
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("host test request should complete");
+    assert_eq!(bad_host.status(), reqwest::StatusCode::FORBIDDEN);
+
     let bad_origin = client
         .post(&url)
         .header("Origin", "https://evil.example")

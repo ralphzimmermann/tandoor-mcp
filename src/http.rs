@@ -33,9 +33,14 @@ pub fn mcp_router(
     allowed_hosts: Vec<String>,
     allowed_origins: Vec<String>,
 ) -> Router {
-    let config = StreamableHttpServerConfig::default()
-        .with_json_response(true)
-        .with_allowed_hosts(allowed_hosts);
+    let config = StreamableHttpServerConfig::default().with_json_response(true);
+    // rmcp treats an explicitly empty host allowlist as "allow all". Keep its
+    // secure loopback defaults when configuration is empty or whitespace-only.
+    let config = if allowed_hosts.is_empty() {
+        config
+    } else {
+        config.with_allowed_hosts(allowed_hosts)
+    };
     let service: StreamableHttpService<TandoorMcpServer, LocalSessionManager> =
         StreamableHttpService::new(
             move || Ok(server.clone()),

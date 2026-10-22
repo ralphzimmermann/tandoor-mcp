@@ -214,7 +214,7 @@ curl -X POST http://your-tandoor/api-token-auth/ \
 - `set_recipe_image` — Set a recipe's photo from a public HTTPS JPEG, PNG, WebP, or GIF URL; private/reserved hosts are rejected and downloads are streamed through a 20 MB limit
 - `remove_recipe_image` — Remove a recipe's photo
 - `delete_recipe` — Delete a recipe permanently
-- `import_recipe_from_url` — Import a recipe from an external URL
+- `import_recipe_from_url` — Parse an external URL, persist the resulting recipe, and import its image when available
 
 ### Recipe Books
 

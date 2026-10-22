@@ -35,7 +35,8 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
 - `BIND_ADDR`: listen address; default `127.0.0.1:3001`.
 - `MCP_ALLOWED_HOSTS`: comma-separated hosts accepted by the transport's
   DNS-rebinding protection; defaults to loopback hosts. The Compose deployment
-  also allows its `mcp-tandoor` service name.
+  also allows its `mcp-tandoor` service name. An empty value retains rmcp's
+  secure loopback defaults rather than disabling host validation.
 - `MCP_ALLOWED_ORIGINS`: comma-separated exact browser Origin values. With an
   empty value, requests that include `Origin` are rejected; non-browser MCP
   clients normally omit it.
@@ -149,6 +150,14 @@ retrying.
 Collection-wide operations stop after 100 pages. Meal-plan shopping ranges are
 limited to 366 days. Destructive name-based operations require an exact name
 or numeric id and do not use partial-name fallback.
+
+Pagination URLs returned by Tandoor are rebased onto `TANDOOR_BASE_URL` before
+the authorization token is attached. This supports reverse proxies while
+preventing an API response from forwarding the token to another host.
+
+URL imports first parse Tandoor's source preview, then create the recipe and
+attempt its image upload. If the image fails, the recipe remains created and
+the tool reports `image_error` so retrying does not create a duplicate.
 
 ## Recipe image security
 

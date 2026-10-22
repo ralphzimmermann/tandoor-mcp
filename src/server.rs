@@ -229,6 +229,46 @@ fn validate_steps(steps: &[RecipeStepInput]) -> Result<(), String> {
     Ok(())
 }
 
+/// Convert Tandoor's source-import preview into a recipe create payload.
+///
+/// The preview contains UI-only fields that `POST /api/recipe/` does not
+/// accept. It also marks keywords that the user chose not to import.
+fn prepare_source_import_recipe(
+    mut recipe: serde_json::Value,
+) -> Result<(serde_json::Value, Option<String>), String> {
+    let object = recipe
+        .as_object_mut()
+        .ok_or_else(|| "Tandoor returned a non-object recipe preview".to_string())?;
+    let image_url = object
+        .remove("image_url")
+        .and_then(|value| value.as_str().map(str::to_owned));
+
+    if let Some(keywords) = object
+        .get_mut("keywords")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        keywords.retain_mut(|keyword| {
+            let Some(keyword) = keyword.as_object_mut() else {
+                return false;
+            };
+            keyword
+                .remove("import_keyword")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true)
+        });
+    }
+
+    let has_name = object
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|name| !name.trim().is_empty());
+    if !has_name {
+        return Err("Tandoor returned a recipe preview without a name".to_string());
+    }
+
+    Ok((recipe, image_url))
+}
+
 /// Assumes `ing` passed validate_ingredient.
 fn build_ingredient_request(
     ing: RecipeStepIngredientInput,
@@ -2180,25 +2220,85 @@ impl TandoorMcpServer {
         match client.import_recipe_from_url(&params.url).await {
             Ok(result) => {
                 if result.error {
-                    Ok(CallToolResult::error(vec![Content::text(
+                    return Ok(CallToolResult::error(vec![Content::text(
                         json!({
                             "error": "Import failed",
                             "message": result.msg,
                             "duplicates": result.duplicates,
                         })
                         .to_string(),
-                    )]))
-                } else {
-                    Ok(CallToolResult::success(vec![Content::text(
+                    )]));
+                }
+
+                // Importing another Tandoor share URL creates the recipe in
+                // the source endpoint itself.
+                if let Some(recipe_id) = result.recipe_id {
+                    let Ok(recipe_id_for_url) = i32::try_from(recipe_id) else {
+                        return tool_err(
+                            "Import partially succeeded",
+                            "Tandoor returned a recipe ID outside the supported range",
+                        );
+                    };
+                    return Ok(CallToolResult::success(vec![Content::text(
                         json!({
-                            "message": result.msg,
-                            "recipe_id": result.recipe_id,
-                            "recipe_url": result.recipe_id.map(|id| client.recipe_url(id as i32)),
-                            "recipe": result.recipe,
+                            "message": if result.msg.is_empty() { "Recipe imported successfully" } else { &result.msg },
+                            "recipe_id": recipe_id,
+                            "recipe_url": client.recipe_url(recipe_id_for_url),
+                            "duplicates": result.duplicates,
                         })
                         .to_string(),
-                    )]))
+                    )]));
                 }
+
+                let Some(recipe_preview) = result.recipe else {
+                    return tool_err(
+                        "Import failed",
+                        "Tandoor returned neither a recipe preview nor a created recipe ID",
+                    );
+                };
+                let (recipe_body, image_url) = match prepare_source_import_recipe(recipe_preview) {
+                    Ok(prepared) => prepared,
+                    Err(e) => return tool_err("Import failed", e),
+                };
+                let created = match client.api_create("recipe", recipe_body).await {
+                    Ok(recipe) => recipe,
+                    Err(e) => return tool_err("Failed to save imported recipe", e),
+                };
+                let Some(recipe_id) = created
+                    .get("id")
+                    .and_then(serde_json::Value::as_i64)
+                    .and_then(|id| i32::try_from(id).ok())
+                else {
+                    return tool_err(
+                        "Import partially succeeded",
+                        "Tandoor created the recipe but returned no usable recipe ID",
+                    );
+                };
+
+                let image_error = if let Some(image_url) = image_url {
+                    match client.download_image(&image_url).await {
+                        Ok((bytes, extension)) => client
+                            .upload_recipe_image(recipe_id, bytes, extension)
+                            .await
+                            .err()
+                            .map(|e| e.to_string()),
+                        Err(e) => Some(e.to_string()),
+                    }
+                } else {
+                    None
+                };
+
+                Ok(CallToolResult::success(vec![Content::text(
+                    json!({
+                        "message": "Recipe imported successfully",
+                        "recipe_id": recipe_id,
+                        "recipe_url": client.recipe_url(recipe_id),
+                        "recipe": created,
+                        "duplicates": result.duplicates,
+                        "image_error": image_error,
+                    })
+                    .to_string(),
+                )]))
             }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(
                 json!({"error": "Failed to import recipe", "details": e.to_string()}).to_string(),
@@ -2748,12 +2848,11 @@ impl TandoorMcpServer {
         };
 
         match client
-            .get_meal_plans(Some(&params.from_date), Some(&params.to_date))
+            .get_all_meal_plans(Some(&params.from_date), Some(&params.to_date))
             .await
         {
-            Ok(response) => {
-                let meal_plans_json: Vec<serde_json::Value> = response
-                    .results
+            Ok(meal_plans) => {
+                let meal_plans_json: Vec<serde_json::Value> = meal_plans
                     .into_iter()
                     .filter(|plan| {
                         params.meal_type.as_ref().is_none_or(|mt| {
@@ -3446,13 +3545,13 @@ impl TandoorMcpServer {
             }
         };
 
-        match client.get_shopping_list().await {
-            Ok(response) => {
+        match client.get_all_shopping_entries().await {
+            Ok(entries) => {
                 let mut removed_items = Vec::new();
                 let mut pantry_updates = Vec::new();
                 let mut errors = Vec::new();
 
-                for entry in response.results {
+                for entry in entries {
                     if entry.checked {
                         match client.delete_shopping_list_entry(entry.id).await {
                             Ok(_) => {
@@ -4785,10 +4884,10 @@ impl TandoorMcpServer {
         };
 
         let meal_plans = match client
-            .get_meal_plans(Some(&params.from_date), Some(&params.to_date))
+            .get_all_meal_plans(Some(&params.from_date), Some(&params.to_date))
             .await
         {
-            Ok(r) => r.results,
+            Ok(plans) => plans,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(
                     json!({"error": "Failed to get meal plans", "details": e.to_string()})
@@ -5751,6 +5850,30 @@ mod tests {
         );
         assert!(req.no_amount);
         assert_eq!(req.amount, "0");
+    }
+
+    #[test]
+    fn source_import_preview_becomes_a_create_payload() {
+        let preview = json!({
+            "name": "Imported Soup",
+            "image_url": "https://images.example/soup.jpg",
+            "keywords": [
+                {"id": null, "name": "quick", "label": "quick", "import_keyword": true},
+                {"id": null, "name": "skip", "label": "skip", "import_keyword": false}
+            ],
+            "steps": []
+        });
+
+        let (prepared, image_url) = prepare_source_import_recipe(preview).unwrap();
+        assert_eq!(
+            image_url.as_deref(),
+            Some("https://images.example/soup.jpg")
+        );
+        assert!(prepared.get("image_url").is_none());
+        let keywords = prepared["keywords"].as_array().unwrap();
+        assert_eq!(keywords.len(), 1);
+        assert_eq!(keywords[0]["name"], "quick");
+        assert!(keywords[0].get("import_keyword").is_none());
     }
 
     fn ingredient(id: i32, food: &str, order: i32) -> serde_json::Value {
