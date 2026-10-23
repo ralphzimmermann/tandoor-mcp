@@ -1963,8 +1963,8 @@ pub struct TandoorMcpServer {
 
 /// Current widget resource URIs. ChatGPT treats a URI as an immutable cache key,
 /// so the version suffix must be bumped whenever the widget HTML changes.
-const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v8.html";
-const MEAL_PLAN_GALLERY_URI: &str = "ui://tandoor/meal-plan-gallery-v14.html";
+const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v9.html";
+const MEAL_PLAN_GALLERY_URI: &str = "ui://tandoor/meal-plan-gallery-v15.html";
 /// `read_resource` serves the current HTML for any `ui://tandoor/<widget>*.html`
 /// URI, so a client holding a stale cached tool descriptor still gets a working
 /// widget instead of an "unknown resource" error.
@@ -7006,7 +7006,7 @@ mod tests {
             RECIPE_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(
-            "ui://tandoor/recipe-gallery-v8.html",
+            "ui://tandoor/recipe-gallery-v9.html",
             MEAL_PLAN_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(

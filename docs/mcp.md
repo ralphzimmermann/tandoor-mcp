@@ -229,11 +229,11 @@ When S3 thumbnails are configured, `get_recipe_details` attaches a bounded
 thumbnail by default; `image: original` explicitly requests the existing
 full-size attachment and `image: none` omits it. `get_recipe_gallery` generates
 or reuses thumbnails, returns short-lived private URLs in widget-only `_meta`,
-and binds the result to `ui://tandoor/recipe-gallery-v8.html`. The server
+and binds the result to `ui://tandoor/recipe-gallery-v9.html`. The server
 advertises the MCP resources capability and serves that URI as
 `text/html;profile=mcp-app`; ChatGPT renders the component inline.
 `get_meal_plan_gallery` similarly binds a complete date-range result to
-`ui://tandoor/meal-plan-gallery-v14.html`, keeping meal metadata, recipe summaries,
+`ui://tandoor/meal-plan-gallery-v15.html`, keeping meal metadata, recipe summaries,
 tags, servings, and photos in one authoritative card gallery instead of relying
 on the client to reconstruct the layout from separate tool calls.
 `get_recipe_image` returns one thumbnail or original image on demand.
@@ -307,6 +307,17 @@ sends the size-changed notification and also calls whichever
 `window.openai.maxHeight`. Both widgets (`recipe_gallery.html` and
 `meal_plan_gallery.html`) share this implementation; keep that call when editing
 either one.
+
+Display mode: both widgets advertise `["inline", "fullscreen"]` (resource
+`_meta` and the `ui/initialize` handshake), and ChatGPT then opens them in its
+side pane (`displayMode: "fullscreen"`), with the same component rendering
+inline once the pane is closed. To default to inline without losing the pane,
+each widget calls `preferInline()` once, after `ui/initialize` or the first
+`openai:set_globals` that reports a non-inline mode: it sends
+`ui/request-display-mode { mode: "inline" }` and `window.openai.requestDisplayMode`.
+The host may refuse; the request is never repeated, so a manual expand sticks.
+If ChatGPT ignores the request or the pane visibly flickers shut, the fallback is
+to advertise `["inline"]` only, accepting that the pane may disappear.
 
 The meal-plan component groups cards by day (locale-formatted heading via
 `Intl.DateTimeFormat` and `window.openai.locale`), hides a plan title that
