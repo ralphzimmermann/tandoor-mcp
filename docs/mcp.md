@@ -245,6 +245,15 @@ model, never rendered in the chat, and that Markdown `![..](url)` written by
 the model renders as a grey placeholder. Making the thumbnail bucket public
 would not change either behaviour, so it stays private.
 
+Because of that, the gallery is not reserved for explicit photo requests. The
+server instructions, the `search_recipes` and `get_recipe_gallery`
+descriptions, and the `image_instruction` in search results all tell the model
+to call `get_recipe_gallery` with the ids of whatever recipes it is about to
+present (a question like "do I have a pudding recipe that works with almond
+milk?" otherwise ends in a text-only answer). The exceptions are
+`has_photo: false` cleanup searches, whose `image_instruction` omits the
+gallery hint, and users who ask for text only.
+
 ChatGPT also decorates prose with its own pictures: when the model lists the
 recipes next to a gallery, the host's "rich list" renderer attaches thumbnails
 from ChatGPT's web image search, so the chat showed stock photos of the dishes

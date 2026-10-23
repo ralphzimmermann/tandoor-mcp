@@ -45,7 +45,7 @@ use rmcp::model::ContentBlock as Content;
 ///
 /// The opening paragraph is deliberately self-contained because ChatGPT gives the
 /// first 512 characters of MCP instructions special prominence.
-pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. For other multi-recipe photo requests, call get_recipe_gallery. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Image imports accept only public HTTPS images up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
+pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. Whenever you present one or more recipes to the user (for example after search_recipes), call get_recipe_gallery with their ids before answering so the photos render inline, even if the user did not ask for images; skip it only for has_photo: false cleanup searches or when the user asks for text only. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Image imports accept only public HTTPS images up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
 
 // Parameter structs for tools
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -2216,7 +2216,7 @@ impl TandoorMcpServer {
 
     // Recipe tools
     #[tool(
-        description = "Search for recipes with flexible querying. Each result has `has_photo`; pass has_photo: false to list recipes missing a photo (e.g. to add photos with set_recipe_image). Call get_recipe_details before displaying a result's photo so the authoritative Tandoor image is attached.",
+        description = "Search for recipes with flexible querying. Each result has `has_photo`; pass has_photo: false to list recipes missing a photo (e.g. to add photos with set_recipe_image). When presenting results to the user, call get_recipe_gallery with their ids so the authoritative photos render inline, even if photos were not requested; use get_recipe_details only for ingredients, steps, or nutrition.",
         annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn search_recipes(
@@ -2316,7 +2316,11 @@ impl TandoorMcpServer {
                 let result = json!({
                     "recipes": recipes_json,
                     "total_count": response.count,
-                    "image_instruction": "Call get_recipe_details before displaying a recipe photo; do not substitute an unrelated, web-searched, or stock image.",
+                    "image_instruction": if params.has_photo == Some(false) {
+                        "These recipes have no photo; do not substitute an unrelated, web-searched, or stock image."
+                    } else {
+                        "Call get_recipe_gallery with the ids of the recipes you present so their authoritative photos render inline, even if the user did not ask for images; do not substitute an unrelated, web-searched, or stock image."
+                    },
                     "search_interpretation": format!("Found {} recipes{}{}",
                         response.count,
                         params.query.as_ref().map_or(String::new(), |q| format!(" matching '{q}'")),
@@ -2341,7 +2345,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Build an inline gallery for 1 to 24 recipes using small authoritative thumbnails. Use this whenever the user asks to see several recipe photos.",
+        description = "Build an inline gallery for 1 to 24 recipes using small authoritative thumbnails. Call this whenever you present recipes to the user (search results, recommendations, comparisons), even if photos were not requested; it is the only way recipe photos reach the user.",
         annotations(read_only_hint = true, open_world_hint = true),
         meta = gallery_tool_meta()
     )]
