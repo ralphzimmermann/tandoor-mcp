@@ -92,10 +92,21 @@
           if (!current && fetchAttempts < 2) setTimeout(fetchDirectly, 1500);
         }
       }
+      // Report the content height through every channel the host may honour.
+      // ChatGPT's bridge has been observed to ignore the MCP Apps size-changed
+      // notification and to expose `notifyIntrinsicWidth` (not `...Height`);
+      // without that call the inline iframe stayed 0x0 until a window resize.
+      // The value is clamped to the host's maximum so it is never rejected.
       function notifyHeight() {
-        const height = Math.ceil(document.documentElement.scrollHeight);
-        if (window.openai?.notifyIntrinsicHeight) window.openai.notifyIntrinsicHeight({ height });
-        else window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, "*");
+        const content = Math.ceil(document.documentElement.scrollHeight);
+        const maxHeight = window.openai?.maxHeight || 0;
+        const height = maxHeight ? Math.min(content, maxHeight) : content;
+        window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, "*");
+        for (const name of ["notifyIntrinsicHeight", "notifyIntrinsicWidth"]) {
+          const report = window.openai?.[name];
+          if (typeof report !== "function") continue;
+          try { Promise.resolve(report.call(window.openai, height)).catch(() => {}); } catch (_) {}
+        }
       }
       function openRecipe(event, url) {
         if (!window.openai?.openExternal) return;

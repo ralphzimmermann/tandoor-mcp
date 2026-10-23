@@ -229,7 +229,7 @@ When S3 thumbnails are configured, `get_recipe_details` attaches a bounded
 thumbnail by default; `image: original` explicitly requests the existing
 full-size attachment and `image: none` omits it. `get_recipe_gallery` generates
 or reuses thumbnails, returns short-lived private URLs in widget-only `_meta`,
-and binds the result to `ui://tandoor/recipe-gallery-v7.html`. The server
+and binds the result to `ui://tandoor/recipe-gallery-v8.html`. The server
 advertises the MCP resources capability and serves that URI as
 `text/html;profile=mcp-app`; ChatGPT renders the component inline.
 `get_meal_plan_gallery` similarly binds a complete date-range result to
@@ -295,7 +295,9 @@ the panel out. The host ignored `ui/notifications/size-changed` (with or without
 `window.openai.notifyIntrinsicWidth(n)` instead. `notifyHeight()` therefore
 sends the size-changed notification and also calls whichever
 `notifyIntrinsic*` function exists with a numeric height clamped to
-`window.openai.maxHeight`. Keep that call when editing the widget.
+`window.openai.maxHeight`. Both widgets (`recipe_gallery.html` and
+`meal_plan_gallery.html`) share this implementation; keep that call when editing
+either one.
 
 The meal-plan component groups cards by day (locale-formatted heading via
 `Intl.DateTimeFormat` and `window.openai.locale`), hides a plan title that
