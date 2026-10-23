@@ -233,10 +233,28 @@ and binds the result to `ui://tandoor/recipe-gallery-v7.html`. The server
 advertises the MCP resources capability and serves that URI as
 `text/html;profile=mcp-app`; ChatGPT renders the component inline.
 `get_meal_plan_gallery` similarly binds a complete date-range result to
-`ui://tandoor/meal-plan-gallery-v10.html`, keeping meal metadata, recipe summaries,
+`ui://tandoor/meal-plan-gallery-v14.html`, keeping meal metadata, recipe summaries,
 tags, servings, and photos in one authoritative card gallery instead of relying
 on the client to reconstruct the layout from separate tool calls.
 `get_recipe_image` returns one thumbnail or original image on demand.
+
+The component is the only way a photo reaches the ChatGPT user. Runtime logs
+from hosted ChatGPT confirmed that MCP `image` content blocks returned by
+`get_recipe_image`/`get_recipe_details` are delivered but shown only to the
+model, never rendered in the chat, and that Markdown `![..](url)` written by
+the model renders as a grey placeholder. Making the thumbnail bucket public
+would not change either behaviour, so it stays private.
+
+ChatGPT also decorates prose with its own pictures: when the model lists the
+recipes next to a gallery, the host's "rich list" renderer attaches thumbnails
+from ChatGPT's web image search, so the chat showed stock photos of the dishes
+beside the gallery's real ones. The server cannot block that renderer; the
+server instructions, both gallery `message` fields, and every
+`image_instruction` therefore tell the model to summarize in Markdown with
+linked recipe names but no images of any kind after a gallery, and never to
+re-fetch photos with `get_recipe_image`. Avoid the phrase "plain text": the
+model reads it as "no Markdown" and drops the recipe links. This is model guidance, not an enforced contract; if the
+behaviour persists, disable web search for the conversation on the ChatGPT side.
 
 Gallery results intentionally contain no inline image blocks. An earlier
 version attached up to 12 base64 JPEG thumbnails (about 500 KB per result) as a
@@ -266,6 +284,18 @@ names the current phase ("Connecting to ChatGPT…", "Waiting for your meal
 plan…", "Loading your meal plan…"), so a stuck widget tells you where the
 hand-off failed; a failed self-fetch ends in an explicit error instead of an
 indefinite loading state.
+
+Height reporting must use ChatGPT's bridge, not only the MCP Apps protocol.
+Widget-side logging in hosted ChatGPT showed the inline iframe stuck at 0×0 for
+the whole turn (content rendered, images loaded, `ui/notifications/tool-result`
+received within ~100 ms) until a browser window resize forced the host to lay
+the panel out. The host ignored `ui/notifications/size-changed` (with or without
+`width`), answered `ui/request-display-mode` without resizing, and had no
+`window.openai.notifyIntrinsicHeight` despite the Apps SDK docs; it exposes
+`window.openai.notifyIntrinsicWidth(n)` instead. `notifyHeight()` therefore
+sends the size-changed notification and also calls whichever
+`notifyIntrinsic*` function exists with a numeric height clamped to
+`window.openai.maxHeight`. Keep that call when editing the widget.
 
 The meal-plan component groups cards by day (locale-formatted heading via
 `Intl.DateTimeFormat` and `window.openai.locale`), hides a plan title that
