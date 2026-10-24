@@ -235,7 +235,11 @@ lists each recipe's name, `recipe_url`, `description`, `servings`, times, and
 photo-plus-content card as the meal-plan widget (name, description, all
 keywords as tags, servings and time row), minus the day grouping, meal-type
 badge, and plan note; keep the two card styles in sync when changing either
-file. The server
+file. Every recipe view (`search_recipes`, `get_recipe_details`, both
+galleries, `update_recipe` results) orders keywords through `keyword_names()`,
+which moves "source" keywords (description or name starting with "Source",
+the kitchen's convention for a recipe's origin) to the front and otherwise
+preserves Tandoor's order; the widgets render in that order. The server
 advertises the MCP resources capability and serves that URI as
 `text/html;profile=mcp-app`; ChatGPT renders the component inline.
 `get_meal_plan_gallery` similarly binds a complete date-range result to

@@ -1213,6 +1213,34 @@ fn tool_err(error: &str, details: impl std::fmt::Display) -> Result<CallToolResu
     )]))
 }
 
+/// Keyword names in display order, with "source" keywords first.
+///
+/// This kitchen marks the origin of a recipe (cookbook, website, person) with a
+/// keyword whose description starts with "Source". Every recipe view lists that
+/// keyword first so the origin is always visible; the remaining keywords keep
+/// Tandoor's order. The name is also checked because list endpoints may omit
+/// keyword descriptions.
+fn keyword_names(keywords: &[crate::client::types::Keyword]) -> Vec<&str> {
+    fn is_source(keyword: &crate::client::types::Keyword) -> bool {
+        let starts_with_source = |text: &str| {
+            text.trim_start()
+                .get(..6)
+                .is_some_and(|p| p.eq_ignore_ascii_case("source"))
+        };
+        keyword
+            .description
+            .as_deref()
+            .is_some_and(starts_with_source)
+            || starts_with_source(&keyword.name)
+    }
+    let (source, rest): (Vec<_>, Vec<_>) = keywords.iter().partition(|k| is_source(k));
+    source
+        .into_iter()
+        .chain(rest)
+        .map(|k| k.name.as_str())
+        .collect()
+}
+
 /// Build a gallery result without exposing presigned bearer URLs to the model.
 ///
 /// Structured content remains useful to non-UI clients, while `_meta` carries
@@ -2304,7 +2332,7 @@ impl TandoorMcpServer {
                             "has_photo": recipe.image.is_some(),
                             "image": recipe.image,
                             "servings": recipe.servings,
-                            "keywords": recipe.keywords.into_iter().map(|k| k.name).collect::<Vec<String>>(),
+                            "keywords": keyword_names(&recipe.keywords),
                             "rating": recipe.rating,
                             "last_cooked": recipe.last_cooked,
                             "created": recipe.created,
@@ -2401,7 +2429,7 @@ impl TandoorMcpServer {
                 "working_time": recipe.working_time,
                 "waiting_time": recipe.waiting_time,
                 "total_time": recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0),
-                "keywords": recipe.keywords.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(),
+                "keywords": keyword_names(&recipe.keywords),
                 "image_status": "not_set"
             });
             let Some(image_path) = recipe.image.clone() else {
@@ -2664,7 +2692,7 @@ impl TandoorMcpServer {
                     "working_time": recipe.working_time,
                     "waiting_time": recipe.waiting_time,
                     "total_time": recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0),
-                    "keywords": recipe.keywords.into_iter().map(|k| k.name).collect::<Vec<String>>(),
+                    "keywords": keyword_names(&recipe.keywords),
                     "image": recipe.image,
                     "requested_image_variant": params.image,
                     "image_status": image_status,
@@ -3600,11 +3628,7 @@ impl TandoorMcpServer {
             item["waiting_time"] = json!(recipe.waiting_time);
             item["total_time"] =
                 json!(recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0));
-            item["keywords"] = json!(recipe
-                .keywords
-                .iter()
-                .map(|keyword| keyword.name.as_str())
-                .collect::<Vec<_>>());
+            item["keywords"] = json!(keyword_names(&recipe.keywords));
 
             let Some(image_path) = recipe.image.clone() else {
                 items.push(item);
@@ -4980,7 +5004,7 @@ impl TandoorMcpServer {
                 "servings": recipe.servings,
                 "working_time": recipe.working_time,
                 "waiting_time": recipe.waiting_time,
-                "keywords": recipe.keywords.into_iter().map(|k| k.name).collect::<Vec<_>>(),
+                "keywords": keyword_names(&recipe.keywords),
                 "steps": steps_view(&recipe.steps, 1.0, &client),
                 "updated": recipe.updated
             }))
@@ -6962,6 +6986,34 @@ impl ServerHandler for TandoorMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyword_names_lists_source_keyword_first() {
+        use crate::client::types::Keyword;
+        let keyword = |name: &str, description: Option<&str>| Keyword {
+            id: 0,
+            name: name.into(),
+            label: None,
+            description: description.map(Into::into),
+            created: None,
+            updated: None,
+            parent: None,
+            numchild: None,
+            full_name: None,
+        };
+        let keywords = vec![
+            keyword("Gluten Free", Some("Dietary restriction")),
+            keyword("Dinner", None),
+            keyword("Ottolenghi", Some("  source: cookbook Simple")),
+            keyword("Source Web", None),
+            keyword("Quick", Some("Resourceful cooks")),
+        ];
+        assert_eq!(
+            keyword_names(&keywords),
+            vec!["Ottolenghi", "Source Web", "Gluten Free", "Dinner", "Quick"]
+        );
+        assert!(keyword_names(&[]).is_empty());
+    }
 
     #[test]
     fn gallery_result_keeps_urls_private_and_stays_small() {
