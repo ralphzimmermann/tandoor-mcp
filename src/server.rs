@@ -1963,7 +1963,7 @@ pub struct TandoorMcpServer {
 
 /// Current widget resource URIs. ChatGPT treats a URI as an immutable cache key,
 /// so the version suffix must be bumped whenever the widget HTML changes.
-const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v10.html";
+const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v11.html";
 const MEAL_PLAN_GALLERY_URI: &str = "ui://tandoor/meal-plan-gallery-v15.html";
 /// `read_resource` serves the current HTML for any `ui://tandoor/<widget>*.html`
 /// URI, so a client holding a stale cached tool descriptor still gets a working
@@ -2389,18 +2389,23 @@ impl TandoorMcpServer {
                     continue;
                 }
             };
-            let recipe_url = client.recipe_url(recipe.id);
-            // Keywords are shown as tags on each card; they live in the
-            // model-visible structured content, unlike the thumbnail URLs.
-            let keywords: Vec<&str> = recipe.keywords.iter().map(|k| k.name.as_str()).collect();
+            // The widget renders the same card as the meal-plan gallery, so the
+            // item carries the same recipe facts. Everything here is
+            // model-visible structured content; thumbnail URLs are not.
+            let mut item = json!({
+                "recipe_id": recipe.id,
+                "name": recipe.name,
+                "recipe_url": client.recipe_url(recipe.id),
+                "description": recipe.description,
+                "servings": recipe.servings,
+                "working_time": recipe.working_time,
+                "waiting_time": recipe.waiting_time,
+                "total_time": recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0),
+                "keywords": recipe.keywords.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(),
+                "image_status": "not_set"
+            });
             let Some(image_path) = recipe.image.clone() else {
-                items.push(json!({
-                    "recipe_id": recipe.id,
-                    "name": recipe.name,
-                    "recipe_url": recipe_url,
-                    "keywords": keywords,
-                    "image_status": "not_set"
-                }));
+                items.push(item);
                 continue;
             };
             let image_client = client.clone();
@@ -2426,26 +2431,15 @@ impl TandoorMcpServer {
                         "width": thumbnail.width,
                         "height": thumbnail.height
                     }));
-                    items.push(json!({
-                        "recipe_id": recipe.id,
-                        "name": recipe.name,
-                        "recipe_url": recipe_url,
-                        "keywords": keywords,
-                        "image_status": "attached"
-                    }));
+                    item["image_status"] = json!("attached");
                 }
                 Err(error) => {
                     tracing::warn!(recipe_id = recipe.id, %error, "Could not prepare thumbnail");
-                    items.push(json!({
-                        "recipe_id": recipe.id,
-                        "name": recipe.name,
-                        "recipe_url": recipe_url,
-                        "keywords": keywords,
-                        "image_status": "unavailable",
-                        "error": error.to_string()
-                    }));
+                    item["image_status"] = json!("unavailable");
+                    item["error"] = json!(error.to_string());
                 }
             }
+            items.push(item);
         }
 
         Ok(gallery_result(
@@ -7012,7 +7006,7 @@ mod tests {
             RECIPE_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(
-            "ui://tandoor/recipe-gallery-v10.html",
+            "ui://tandoor/recipe-gallery-v11.html",
             MEAL_PLAN_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(
