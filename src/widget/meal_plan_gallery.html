@@ -152,6 +152,7 @@
       let toolInput = null;
       let fetching = false;
       let fetchAttempts = 0;
+      let inlineRequested = false;
 
       // --- host plumbing -------------------------------------------------
       function send(method, params) {
@@ -159,10 +160,34 @@
         window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
         return id;
       }
+      // Ask the host to show the gallery inline. ChatGPT opens widgets that
+      // declare `fullscreen` in its side pane; requesting `inline` keeps the
+      // gallery in the chat while the user can still expand it. Sent at most
+      // once, only when the host reports a non-inline mode, so a later manual
+      // expand is never undone. The host may refuse the request.
+      function preferInline(mode) {
+        if (inlineRequested || typeof mode !== "string" || mode === "inline") return;
+        inlineRequested = true;
+        send("ui/request-display-mode", { mode: "inline" });
+        const request = window.openai?.requestDisplayMode;
+        if (typeof request !== "function") return;
+        try { Promise.resolve(request.call(window.openai, { mode: "inline" })).catch(() => {}); } catch (_) {}
+      }
+      // Report the content height through every channel the host may honour.
+      // ChatGPT's bridge has been observed to ignore the MCP Apps size-changed
+      // notification and to expose `notifyIntrinsicWidth` (not `...Height`);
+      // without that call the inline iframe stayed 0x0 until a window resize.
+      // The value is clamped to the host's maximum so it is never rejected.
       function notifyHeight() {
-        const height = Math.ceil(document.documentElement.scrollHeight);
-        if (window.openai?.notifyIntrinsicHeight) window.openai.notifyIntrinsicHeight({ height });
-        else window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, "*");
+        const content = Math.ceil(document.documentElement.scrollHeight);
+        const maxHeight = window.openai?.maxHeight || 0;
+        const height = maxHeight ? Math.min(content, maxHeight) : content;
+        window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, "*");
+        for (const name of ["notifyIntrinsicHeight", "notifyIntrinsicWidth"]) {
+          const report = window.openai?.[name];
+          if (typeof report !== "function") continue;
+          try { Promise.resolve(report.call(window.openai, height)).catch(() => {}); } catch (_) {}
+        }
       }
       // Loading-state copy doubles as a diagnostic: it names the phase the
       // widget is stuck in if the host never hands over the tool result.
@@ -453,6 +478,7 @@
           initialized = true;
           window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized" }, "*");
           applyTheme(message.result.hostContext?.theme);
+          preferInline(message.result.hostContext?.displayMode ?? window.openai?.displayMode);
           if (!current) setStatus("Waiting for your meal plan…");
           renderOpenAiGlobals();
           setTimeout(fetchDirectly, 2000);
@@ -477,6 +503,7 @@
         const globals = event.detail?.globals;
         if (globals?.toolInput) toolInput = globals.toolInput;
         if (globals?.theme) applyTheme(globals.theme);
+        preferInline(globals?.displayMode);
         if (!globals || globals.toolOutput !== undefined || globals.toolResponseMetadata !== undefined) {
           renderOpenAiGlobals(globals);
         }

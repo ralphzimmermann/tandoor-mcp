@@ -3,22 +3,83 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- Card styling mirrors meal_plan_gallery.html (minus day sections, meal-type
+       badge, and plan note) so both galleries look identical in ChatGPT. -->
   <style>
-    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    :root {
+      color-scheme: light dark;
+      --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --text: var(--openai-text-color, CanvasText);
+      --muted: var(--openai-secondary-text-color, color-mix(in srgb, CanvasText 62%, transparent));
+      --border: color-mix(in srgb, CanvasText 12%, transparent);
+      --subtle: color-mix(in srgb, CanvasText 6%, transparent);
+      --card: color-mix(in srgb, Canvas 98%, CanvasText 2%);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 12px; color: var(--openai-text-color, CanvasText); background: transparent; }
-    #status { margin: 0; color: var(--openai-secondary-text-color, GrayText); }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-    .card { overflow: hidden; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 12px; background: color-mix(in srgb, Canvas 94%, CanvasText 6%); }
-    .image { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: color-mix(in srgb, CanvasText 8%, transparent); }
-    .placeholder { display: grid; place-items: center; color: GrayText; }
-    .title { display: block; padding: 10px; overflow: hidden; color: inherit; font-weight: 600; line-height: 1.25; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
-    .title:hover, .title:focus-visible { text-decoration: underline; }
+    body { margin: 0; padding: 18px 20px 24px; color: var(--text); background: transparent; }
+    #status { margin: 0; color: var(--muted); font-size: 15px; }
+    .cards { display: grid; gap: 16px; }
+    .card {
+      display: grid;
+      grid-template-columns: minmax(210px, 36%) minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: var(--card);
+      box-shadow: 0 1px 2px color-mix(in srgb, CanvasText 6%, transparent);
+    }
+    .media { position: relative; min-height: 250px; background: var(--subtle); }
+    .image { display: block; width: 100%; height: 100%; min-height: 250px; object-fit: cover; }
+    .placeholder { display: grid; place-items: center; color: var(--muted); text-align: center; font-size: 14px; }
+    .content { display: flex; min-width: 0; flex-direction: column; gap: 14px; padding: 24px 26px 26px; }
+    .name {
+      display: inline;
+      color: inherit;
+      font-size: clamp(22px, 2.4vw, 30px);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      text-decoration: none;
+      text-wrap: balance;
+    }
+    .name:hover, .name:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+    .description { max-width: 70ch; margin: 0; font-size: 16px; line-height: 1.55; }
+    .tags { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tag {
+      padding: 6px 11px;
+      border: 1px solid color-mix(in oklch, oklch(0.72 0.13 var(--hue)) 55%, transparent);
+      border-radius: 999px;
+      background: color-mix(in oklch, oklch(0.78 0.12 var(--hue)) 26%, Canvas);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+    .meta { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 0; padding-top: 2px; font-size: 15px; line-height: 1.3; color: var(--muted); }
+    .meta strong { color: var(--text); font-weight: 650; }
+    .dot { color: var(--border); }
+    @media (max-width: 560px) {
+      body { padding: 12px; }
+      .cards { gap: 14px; }
+      .card { grid-template-columns: 1fr; border-radius: 16px; }
+      .media, .image { min-height: 0; aspect-ratio: 16 / 10; }
+      .content { gap: 12px; padding: 18px; }
+      .name { font-size: clamp(22px, 7vw, 28px); }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .card { transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease; }
+      .card:hover {
+        border-color: color-mix(in srgb, CanvasText 22%, transparent);
+        box-shadow: 0 6px 20px color-mix(in srgb, CanvasText 10%, transparent);
+      }
+    }
   </style>
 </head>
 <body>
   <p id="status">Preparing recipe photos…</p>
-  <main id="gallery" class="grid" aria-live="polite"></main>
+  <main id="gallery" class="cards" aria-live="polite"></main>
   <script>
     (() => {
       const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
@@ -30,11 +91,25 @@
       let toolInput = null;
       let fetching = false;
       let fetchAttempts = 0;
+      let inlineRequested = false;
 
       function send(method, params) {
         const id = ++rpcId;
         window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
         return id;
+      }
+      // Ask the host to show the gallery inline. ChatGPT opens widgets that
+      // declare `fullscreen` in its side pane; requesting `inline` keeps the
+      // gallery in the chat while the user can still expand it. Sent at most
+      // once, only when the host reports a non-inline mode, so a later manual
+      // expand is never undone. The host may refuse the request.
+      function preferInline(mode) {
+        if (inlineRequested || typeof mode !== "string" || mode === "inline") return;
+        inlineRequested = true;
+        send("ui/request-display-mode", { mode: "inline" });
+        const request = window.openai?.requestDisplayMode;
+        if (typeof request !== "function") return;
+        try { Promise.resolve(request.call(window.openai, { mode: "inline" })).catch(() => {}); } catch (_) {}
       }
       // Loading-state copy doubles as a diagnostic: it names the phase the
       // widget is stuck in if the host never hands over the tool result.
@@ -92,10 +167,21 @@
           if (!current && fetchAttempts < 2) setTimeout(fetchDirectly, 1500);
         }
       }
+      // Report the content height through every channel the host may honour.
+      // ChatGPT's bridge has been observed to ignore the MCP Apps size-changed
+      // notification and to expose `notifyIntrinsicWidth` (not `...Height`);
+      // without that call the inline iframe stayed 0x0 until a window resize.
+      // The value is clamped to the host's maximum so it is never rejected.
       function notifyHeight() {
-        const height = Math.ceil(document.documentElement.scrollHeight);
-        if (window.openai?.notifyIntrinsicHeight) window.openai.notifyIntrinsicHeight({ height });
-        else window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, "*");
+        const content = Math.ceil(document.documentElement.scrollHeight);
+        const maxHeight = window.openai?.maxHeight || 0;
+        const height = maxHeight ? Math.min(content, maxHeight) : content;
+        window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, "*");
+        for (const name of ["notifyIntrinsicHeight", "notifyIntrinsicWidth"]) {
+          const report = window.openai?.[name];
+          if (typeof report !== "function") continue;
+          try { Promise.resolve(report.call(window.openai, height)).catch(() => {}); } catch (_) {}
+        }
       }
       function openRecipe(event, url) {
         if (!window.openai?.openExternal) return;
@@ -129,38 +215,89 @@
         const gallery = document.getElementById("gallery");
         const status = document.getElementById("status");
         gallery.replaceChildren();
-        status.hidden = true;
-        for (const item of data.items) {
-          const card = document.createElement("article");
-          card.className = "card";
-          if (item.image_status === "attached" && item.thumbnail_url) {
-            const image = document.createElement("img");
-            image.className = "image";
-            image.src = item.thumbnail_url;
-            image.alt = `Photo of ${item.name}`;
-            image.loading = "lazy";
-            image.referrerPolicy = "no-referrer";
-            image.addEventListener("load", notifyHeight, { once: true });
-            image.addEventListener("error", () => {
-              image.replaceWith(placeholder("Photo unavailable"));
-              notifyHeight();
-            }, { once: true });
-            card.append(image);
-          } else {
-            card.append(placeholder(item.image_status === "not_set" ? "No photo" : "Photo unavailable"));
-          }
-          const link = document.createElement("a");
-          link.className = "title";
-          link.textContent = item.name;
-          link.href = item.recipe_url || "#";
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          if (item.recipe_url) link.addEventListener("click", event => openRecipe(event, item.recipe_url));
-          card.append(link);
-          gallery.append(card);
+        if (!data.items.length) {
+          setStatus("No recipes were found.");
+          return;
         }
+        status.hidden = true;
+        for (const item of data.items) gallery.append(card(item));
         notifyHeight();
         refreshExpired();
+      }
+
+      // --- card building (same structure as meal_plan_gallery.html) --------
+      function element(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = text;
+        return node;
+      }
+      function formatMinutes(minutes) {
+        const total = Number(minutes) || 0;
+        const hours = Math.floor(total / 60);
+        const rest = total % 60;
+        if (!hours) return `${rest} min`;
+        return rest ? `${hours} h ${rest} min` : `${hours} h`;
+      }
+      function photo(item) {
+        const media = element("div", "media");
+        if (item.image_status !== "attached" || !item.thumbnail_url) {
+          media.append(element("div", "image placeholder", item.image_status === "not_set" ? "No photo" : "Photo unavailable"));
+          return media;
+        }
+        const image = element("img", "image");
+        image.src = item.thumbnail_url;
+        image.alt = `Photo of ${item.name}`;
+        image.loading = "lazy";
+        image.referrerPolicy = "no-referrer";
+        image.addEventListener("load", notifyHeight, { once: true });
+        image.addEventListener("error", () => {
+          image.replaceWith(element("div", "image placeholder", "Photo unavailable"));
+          notifyHeight();
+        }, { once: true });
+        media.append(image);
+        return media;
+      }
+      function heading(item) {
+        const block = element("header", "heading");
+        if (item.recipe_url) {
+          const link = element("a", "name", item.name);
+          link.href = item.recipe_url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.addEventListener("click", event => openRecipe(event, item.recipe_url));
+          block.append(link);
+        } else {
+          block.append(element("span", "name", item.name));
+        }
+        return block;
+      }
+      function metaRow(item) {
+        const facts = [];
+        const servings = Number(item.servings);
+        if (servings) facts.push([String(servings), servings === 1 ? "serving" : "servings"]);
+        if (item.working_time) facts.push([formatMinutes(item.working_time), "active"]);
+        if (item.waiting_time) facts.push([formatMinutes(item.waiting_time), "waiting"]);
+        if (!item.working_time && !item.waiting_time && item.total_time) facts.push([formatMinutes(item.total_time), "total"]);
+        if (!facts.length) return null;
+        const row = element("p", "meta");
+        facts.forEach(([value, label], index) => {
+          if (index) row.append(element("span", "dot", "·"));
+          const fact = element("span");
+          fact.append(element("strong", null, value), ` ${label}`);
+          row.append(fact);
+        });
+        return row;
+      }
+      function card(item) {
+        const article = element("article", "card");
+        article.append(photo(item));
+        const content = element("div", "content");
+        content.append(heading(item));
+        if (item.description) content.append(element("p", "description", item.description));
+        for (const part of [tags(item.keywords), metaRow(item)]) if (part) content.append(part);
+        article.append(content);
+        return article;
       }
       function renderOpenAiGlobals(globals = window.openai) {
         const toolOutput = globals?.toolOutput ?? window.openai?.toolOutput;
@@ -175,15 +312,26 @@
         if (initialized) return;
         initializeIds.add(send("ui/initialize", {
           protocolVersion: MCP_APPS_PROTOCOL_VERSION,
-          appInfo: { name: "tandoor-recipe-gallery", version: "1.6.0" },
+          appInfo: { name: "tandoor-recipe-gallery", version: "2.0.0" },
           appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }
         }));
       }
-      function placeholder(text) {
-        const node = document.createElement("div");
-        node.className = "image placeholder";
-        node.textContent = text;
-        return node;
+      // Stable per-keyword colour so the same tag looks alike on every card.
+      function hue(text) {
+        let value = 0;
+        for (const char of text.toLowerCase()) value = (value * 31 + char.codePointAt(0)) % 360;
+        return value;
+      }
+      // All keywords are shown; the card grows and notifyHeight() reports it.
+      function tags(keywords) {
+        if (!Array.isArray(keywords) || !keywords.length) return null;
+        const list = element("div", "tags");
+        for (const keyword of keywords) {
+          const tag = element("span", "tag", keyword);
+          tag.style.setProperty("--hue", hue(keyword));
+          list.append(tag);
+        }
+        return list;
       }
       async function refreshExpired() {
         if (!current?.urls_expire_at || Date.now() < current.urls_expire_at * 1000 || fetching) return;
@@ -205,6 +353,7 @@
           initialized = true;
           window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized" }, "*");
           applyTheme(message.result.hostContext?.theme);
+          preferInline(message.result.hostContext?.displayMode ?? window.openai?.displayMode);
           if (!current) setStatus("Waiting for recipe photos…");
           renderOpenAiGlobals();
           setTimeout(fetchDirectly, 2000);
@@ -229,6 +378,7 @@
         const globals = event.detail?.globals;
         if (globals?.toolInput) toolInput = globals.toolInput;
         if (globals?.theme) applyTheme(globals.theme);
+        preferInline(globals?.displayMode);
         if (!globals || globals.toolOutput !== undefined || globals.toolResponseMetadata !== undefined) {
           renderOpenAiGlobals(globals);
         }

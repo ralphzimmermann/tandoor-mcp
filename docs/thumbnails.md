@@ -268,4 +268,13 @@ resolving to the current HTML. ChatGPT then rendered the cards, but on the live
 turn only after the chat was reloaded; v10 shortens the self-fetch delay, adds a
 retry with timeout, names the loading phase in the status text, and reworks the
 card design (day grouping, tinted tags, humanized times, collapsible notes).
-Hosted-ChatGPT acceptance of v10 is pending.
+
+On 2026-10-23 hosted ChatGPT rendered v10 correctly (3/3 thumbnails, private
+URLs only in `_meta`, ~11 KB result) but the inline panel stayed blank until
+the browser window was resized. Server-side logging ruled out the data path;
+widget-side logging traced it to iframe sizing (see "Height reporting" in
+`mcp.md`). v14 reports the height through `window.openai.notifyIntrinsicWidth`
+as well as the MCP Apps notification; the recipe gallery (v8) carries the same
+fix. ChatGPT caches the connector snapshot, so
+after deploying a new widget URI use Settings → Apps & Connectors → Tandoor →
+Actions → Refresh app before testing.

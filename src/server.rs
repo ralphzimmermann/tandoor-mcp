@@ -45,7 +45,7 @@ use rmcp::model::ContentBlock as Content;
 ///
 /// The opening paragraph is deliberately self-contained because ChatGPT gives the
 /// first 512 characters of MCP instructions special prominence.
-pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. For other multi-recipe photo requests, call get_recipe_gallery. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Image imports accept only public HTTPS images up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
+pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. Whenever you present one or more recipes to the user (for example after search_recipes), call get_recipe_gallery with their ids before answering so the photos render inline, even if the user did not ask for images; skip it only for has_photo: false cleanup searches or when the user asks for text only. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Image imports accept only public HTTPS images up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
 
 // Parameter structs for tools
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1213,6 +1213,34 @@ fn tool_err(error: &str, details: impl std::fmt::Display) -> Result<CallToolResu
     )]))
 }
 
+/// Keyword names in display order, with "source" keywords first.
+///
+/// This kitchen marks the origin of a recipe (cookbook, website, person) with a
+/// keyword whose description starts with "Source". Every recipe view lists that
+/// keyword first so the origin is always visible; the remaining keywords keep
+/// Tandoor's order. The name is also checked because list endpoints may omit
+/// keyword descriptions.
+fn keyword_names(keywords: &[crate::client::types::Keyword]) -> Vec<&str> {
+    fn is_source(keyword: &crate::client::types::Keyword) -> bool {
+        let starts_with_source = |text: &str| {
+            text.trim_start()
+                .get(..6)
+                .is_some_and(|p| p.eq_ignore_ascii_case("source"))
+        };
+        keyword
+            .description
+            .as_deref()
+            .is_some_and(starts_with_source)
+            || starts_with_source(&keyword.name)
+    }
+    let (source, rest): (Vec<_>, Vec<_>) = keywords.iter().partition(|k| is_source(k));
+    source
+        .into_iter()
+        .chain(rest)
+        .map(|k| k.name.as_str())
+        .collect()
+}
+
 /// Build a gallery result without exposing presigned bearer URLs to the model.
 ///
 /// Structured content remains useful to non-UI clients, while `_meta` carries
@@ -1963,8 +1991,8 @@ pub struct TandoorMcpServer {
 
 /// Current widget resource URIs. ChatGPT treats a URI as an immutable cache key,
 /// so the version suffix must be bumped whenever the widget HTML changes.
-const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v7.html";
-const MEAL_PLAN_GALLERY_URI: &str = "ui://tandoor/meal-plan-gallery-v10.html";
+const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v11.html";
+const MEAL_PLAN_GALLERY_URI: &str = "ui://tandoor/meal-plan-gallery-v15.html";
 /// `read_resource` serves the current HTML for any `ui://tandoor/<widget>*.html`
 /// URI, so a client holding a stale cached tool descriptor still gets a working
 /// widget instead of an "unknown resource" error.
@@ -2216,7 +2244,7 @@ impl TandoorMcpServer {
 
     // Recipe tools
     #[tool(
-        description = "Search for recipes with flexible querying. Each result has `has_photo`; pass has_photo: false to list recipes missing a photo (e.g. to add photos with set_recipe_image). Call get_recipe_details before displaying a result's photo so the authoritative Tandoor image is attached.",
+        description = "Search for recipes with flexible querying. Each result has `has_photo`; pass has_photo: false to list recipes missing a photo (e.g. to add photos with set_recipe_image). When presenting results to the user, call get_recipe_gallery with their ids so the authoritative photos render inline, even if photos were not requested; use get_recipe_details only for ingredients, steps, or nutrition.",
         annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn search_recipes(
@@ -2304,7 +2332,7 @@ impl TandoorMcpServer {
                             "has_photo": recipe.image.is_some(),
                             "image": recipe.image,
                             "servings": recipe.servings,
-                            "keywords": recipe.keywords.into_iter().map(|k| k.name).collect::<Vec<String>>(),
+                            "keywords": keyword_names(&recipe.keywords),
                             "rating": recipe.rating,
                             "last_cooked": recipe.last_cooked,
                             "created": recipe.created,
@@ -2316,7 +2344,11 @@ impl TandoorMcpServer {
                 let result = json!({
                     "recipes": recipes_json,
                     "total_count": response.count,
-                    "image_instruction": "Call get_recipe_details before displaying a recipe photo; do not substitute an unrelated image.",
+                    "image_instruction": if params.has_photo == Some(false) {
+                        "These recipes have no photo; do not substitute an unrelated, web-searched, or stock image."
+                    } else {
+                        "Call get_recipe_gallery with the ids of the recipes you present so their authoritative photos render inline, even if the user did not ask for images; do not substitute an unrelated, web-searched, or stock image."
+                    },
                     "search_interpretation": format!("Found {} recipes{}{}",
                         response.count,
                         params.query.as_ref().map_or(String::new(), |q| format!(" matching '{q}'")),
@@ -2341,7 +2373,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Build an inline gallery for 1 to 24 recipes using small authoritative thumbnails. Use this whenever the user asks to see several recipe photos.",
+        description = "Build an inline gallery for 1 to 24 recipes using small authoritative thumbnails. Call this whenever you present recipes to the user (search results, recommendations, comparisons), even if photos were not requested; it is the only way recipe photos reach the user.",
         annotations(read_only_hint = true, open_world_hint = true),
         meta = gallery_tool_meta()
     )]
@@ -2385,14 +2417,23 @@ impl TandoorMcpServer {
                     continue;
                 }
             };
-            let recipe_url = client.recipe_url(recipe.id);
+            // The widget renders the same card as the meal-plan gallery, so the
+            // item carries the same recipe facts. Everything here is
+            // model-visible structured content; thumbnail URLs are not.
+            let mut item = json!({
+                "recipe_id": recipe.id,
+                "name": recipe.name,
+                "recipe_url": client.recipe_url(recipe.id),
+                "description": recipe.description,
+                "servings": recipe.servings,
+                "working_time": recipe.working_time,
+                "waiting_time": recipe.waiting_time,
+                "total_time": recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0),
+                "keywords": keyword_names(&recipe.keywords),
+                "image_status": "not_set"
+            });
             let Some(image_path) = recipe.image.clone() else {
-                items.push(json!({
-                    "recipe_id": recipe.id,
-                    "name": recipe.name,
-                    "recipe_url": recipe_url,
-                    "image_status": "not_set"
-                }));
+                items.push(item);
                 continue;
             };
             let image_client = client.clone();
@@ -2418,30 +2459,21 @@ impl TandoorMcpServer {
                         "width": thumbnail.width,
                         "height": thumbnail.height
                     }));
-                    items.push(json!({
-                        "recipe_id": recipe.id,
-                        "name": recipe.name,
-                        "recipe_url": recipe_url,
-                        "image_status": "attached"
-                    }));
+                    item["image_status"] = json!("attached");
                 }
                 Err(error) => {
                     tracing::warn!(recipe_id = recipe.id, %error, "Could not prepare thumbnail");
-                    items.push(json!({
-                        "recipe_id": recipe.id,
-                        "name": recipe.name,
-                        "recipe_url": recipe_url,
-                        "image_status": "unavailable",
-                        "error": error.to_string()
-                    }));
+                    item["image_status"] = json!("unavailable");
+                    item["error"] = json!(error.to_string());
                 }
             }
+            items.push(item);
         }
 
         Ok(gallery_result(
             json!({
                 "items": items,
-                "message": "Render the attached gallery component; it displays the thumbnails itself. Never print or reconstruct thumbnail URLs. If the component cannot be shown, use get_recipe_image for individual photos."
+                "message": "The attached gallery component displays the authoritative recipe photos. Summarize in Markdown with each recipe name linked to its recipe_url, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos), never print or reconstruct thumbnail URLs, and do not call get_recipe_image for these recipes."
             }),
             private_items,
             expires_at,
@@ -2638,15 +2670,15 @@ impl TandoorMcpServer {
                 };
                 let image_instruction = match image_status {
                     "attached" => {
-                        "Use the attached image as the authoritative photo for this recipe."
+                        "Use the attached image as the authoritative photo for this recipe; do not add web-searched or stock photos."
                     }
                     "not_requested" => {
                         "The stored photo was intentionally omitted from this response."
                     }
                     "unavailable" => {
-                        "The stored photo could not be attached; do not substitute an unrelated image."
+                        "The stored photo could not be attached; do not substitute an unrelated, web-searched, or stock image."
                     }
-                    _ => "No photo is stored for this recipe; do not substitute an unrelated image.",
+                    _ => "No photo is stored for this recipe; do not substitute an unrelated, web-searched, or stock image.",
                 };
 
                 let result = json!({
@@ -2660,7 +2692,7 @@ impl TandoorMcpServer {
                     "working_time": recipe.working_time,
                     "waiting_time": recipe.waiting_time,
                     "total_time": recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0),
-                    "keywords": recipe.keywords.into_iter().map(|k| k.name).collect::<Vec<String>>(),
+                    "keywords": keyword_names(&recipe.keywords),
                     "image": recipe.image,
                     "requested_image_variant": params.image,
                     "image_status": image_status,
@@ -3596,11 +3628,7 @@ impl TandoorMcpServer {
             item["waiting_time"] = json!(recipe.waiting_time);
             item["total_time"] =
                 json!(recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0));
-            item["keywords"] = json!(recipe
-                .keywords
-                .iter()
-                .map(|keyword| keyword.name.as_str())
-                .collect::<Vec<_>>());
+            item["keywords"] = json!(keyword_names(&recipe.keywords));
 
             let Some(image_path) = recipe.image.clone() else {
                 items.push(item);
@@ -3652,7 +3680,7 @@ impl TandoorMcpServer {
                 "from_date": params.from_date,
                 "to_date": params.to_date,
                 "meal_type_filter": params.meal_type,
-                "message": "Render the attached meal-plan gallery component; it displays the recipe photos itself. Never print or reconstruct thumbnail URLs. If the component cannot be shown, use get_recipe_image for individual photos."
+                "message": "The attached meal-plan gallery component displays the authoritative recipe photos. Summarize in Markdown with each recipe name linked to its recipe_url, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos), never print or reconstruct thumbnail URLs, and do not call get_recipe_image for these recipes."
             }),
             private_items,
             urls_expire_at,
@@ -4976,7 +5004,7 @@ impl TandoorMcpServer {
                 "servings": recipe.servings,
                 "working_time": recipe.working_time,
                 "waiting_time": recipe.waiting_time,
-                "keywords": recipe.keywords.into_iter().map(|k| k.name).collect::<Vec<_>>(),
+                "keywords": keyword_names(&recipe.keywords),
                 "steps": steps_view(&recipe.steps, 1.0, &client),
                 "updated": recipe.updated
             }))
@@ -6960,6 +6988,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn keyword_names_lists_source_keyword_first() {
+        use crate::client::types::Keyword;
+        let keyword = |name: &str, description: Option<&str>| Keyword {
+            id: 0,
+            name: name.into(),
+            label: None,
+            description: description.map(Into::into),
+            created: None,
+            updated: None,
+            parent: None,
+            numchild: None,
+            full_name: None,
+        };
+        let keywords = vec![
+            keyword("Gluten Free", Some("Dietary restriction")),
+            keyword("Dinner", None),
+            keyword("Ottolenghi", Some("  source: cookbook Simple")),
+            keyword("Source Web", None),
+            keyword("Quick", Some("Resourceful cooks")),
+        ];
+        assert_eq!(
+            keyword_names(&keywords),
+            vec!["Ottolenghi", "Source Web", "Gluten Free", "Dinner", "Quick"]
+        );
+        assert!(keyword_names(&[]).is_empty());
+    }
+
+    #[test]
     fn gallery_result_keeps_urls_private_and_stays_small() {
         let result = gallery_result(
             json!({"items": [{"recipe_id": 7, "name": "Soup"}]}),
@@ -7002,7 +7058,7 @@ mod tests {
             RECIPE_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(
-            "ui://tandoor/recipe-gallery-v7.html",
+            "ui://tandoor/recipe-gallery-v11.html",
             MEAL_PLAN_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(
