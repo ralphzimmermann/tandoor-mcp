@@ -296,7 +296,7 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
         .expect("gallery tool should be present");
     assert_eq!(
         gallery["_meta"]["ui"]["resourceUri"],
-        "ui://tandoor/recipe-gallery-v9.html"
+        "ui://tandoor/recipe-gallery-v10.html"
     );
     let meal_gallery = first_tools
         .iter()
@@ -319,7 +319,7 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     .await;
     assert_eq!(
         resources["result"]["resources"][0]["uri"],
-        "ui://tandoor/recipe-gallery-v9.html"
+        "ui://tandoor/recipe-gallery-v10.html"
     );
     assert_eq!(
         resources["result"]["resources"][1]["uri"],
@@ -333,7 +333,7 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
             "resources/read",
             json!({
                 "_meta": modern_meta(),
-                "uri": "ui://tandoor/recipe-gallery-v9.html"
+                "uri": "ui://tandoor/recipe-gallery-v10.html"
             }),
         )
         .await,

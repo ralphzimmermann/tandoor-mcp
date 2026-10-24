@@ -14,6 +14,17 @@
     .placeholder { display: grid; place-items: center; color: GrayText; }
     .title { display: block; padding: 10px; overflow: hidden; color: inherit; font-weight: 600; line-height: 1.25; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
     .title:hover, .title:focus-visible { text-decoration: underline; }
+    .tags { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 10px 10px; }
+    .tag {
+      padding: 3px 8px;
+      border: 1px solid color-mix(in oklch, oklch(0.72 0.13 var(--hue)) 55%, transparent);
+      border-radius: 999px;
+      background: color-mix(in oklch, oklch(0.78 0.12 var(--hue)) 26%, Canvas);
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -182,6 +193,8 @@
           link.rel = "noopener noreferrer";
           if (item.recipe_url) link.addEventListener("click", event => openRecipe(event, item.recipe_url));
           card.append(link);
+          const tagList = tags(item.keywords);
+          if (tagList) card.append(tagList);
           gallery.append(card);
         }
         notifyHeight();
@@ -200,7 +213,7 @@
         if (initialized) return;
         initializeIds.add(send("ui/initialize", {
           protocolVersion: MCP_APPS_PROTOCOL_VERSION,
-          appInfo: { name: "tandoor-recipe-gallery", version: "1.6.0" },
+          appInfo: { name: "tandoor-recipe-gallery", version: "1.7.0" },
           appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }
         }));
       }
@@ -209,6 +222,26 @@
         node.className = "image placeholder";
         node.textContent = text;
         return node;
+      }
+      // Stable per-keyword colour so the same tag looks alike on every card.
+      function hue(text) {
+        let value = 0;
+        for (const char of text.toLowerCase()) value = (value * 31 + char.codePointAt(0)) % 360;
+        return value;
+      }
+      // All keywords are shown; the card grows and notifyHeight() reports it.
+      function tags(keywords) {
+        if (!Array.isArray(keywords) || !keywords.length) return null;
+        const list = document.createElement("div");
+        list.className = "tags";
+        for (const keyword of keywords) {
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = keyword;
+          tag.style.setProperty("--hue", hue(keyword));
+          list.append(tag);
+        }
+        return list;
       }
       async function refreshExpired() {
         if (!current?.urls_expire_at || Date.now() < current.urls_expire_at * 1000 || fetching) return;

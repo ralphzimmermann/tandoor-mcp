@@ -229,7 +229,9 @@ When S3 thumbnails are configured, `get_recipe_details` attaches a bounded
 thumbnail by default; `image: original` explicitly requests the existing
 full-size attachment and `image: none` omits it. `get_recipe_gallery` generates
 or reuses thumbnails, returns short-lived private URLs in widget-only `_meta`,
-and binds the result to `ui://tandoor/recipe-gallery-v9.html`. The server
+lists each recipe's name, `recipe_url`, and `keywords` in the structured
+content (the widget renders all keywords as tags under the photo),
+and binds the result to `ui://tandoor/recipe-gallery-v10.html`. The server
 advertises the MCP resources capability and serves that URI as
 `text/html;profile=mcp-app`; ChatGPT renders the component inline.
 `get_meal_plan_gallery` similarly binds a complete date-range result to

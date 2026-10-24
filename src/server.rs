@@ -1963,7 +1963,7 @@ pub struct TandoorMcpServer {
 
 /// Current widget resource URIs. ChatGPT treats a URI as an immutable cache key,
 /// so the version suffix must be bumped whenever the widget HTML changes.
-const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v9.html";
+const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v10.html";
 const MEAL_PLAN_GALLERY_URI: &str = "ui://tandoor/meal-plan-gallery-v15.html";
 /// `read_resource` serves the current HTML for any `ui://tandoor/<widget>*.html`
 /// URI, so a client holding a stale cached tool descriptor still gets a working
@@ -2390,11 +2390,15 @@ impl TandoorMcpServer {
                 }
             };
             let recipe_url = client.recipe_url(recipe.id);
+            // Keywords are shown as tags on each card; they live in the
+            // model-visible structured content, unlike the thumbnail URLs.
+            let keywords: Vec<&str> = recipe.keywords.iter().map(|k| k.name.as_str()).collect();
             let Some(image_path) = recipe.image.clone() else {
                 items.push(json!({
                     "recipe_id": recipe.id,
                     "name": recipe.name,
                     "recipe_url": recipe_url,
+                    "keywords": keywords,
                     "image_status": "not_set"
                 }));
                 continue;
@@ -2426,6 +2430,7 @@ impl TandoorMcpServer {
                         "recipe_id": recipe.id,
                         "name": recipe.name,
                         "recipe_url": recipe_url,
+                        "keywords": keywords,
                         "image_status": "attached"
                     }));
                 }
@@ -2435,6 +2440,7 @@ impl TandoorMcpServer {
                         "recipe_id": recipe.id,
                         "name": recipe.name,
                         "recipe_url": recipe_url,
+                        "keywords": keywords,
                         "image_status": "unavailable",
                         "error": error.to_string()
                     }));
@@ -7006,7 +7012,7 @@ mod tests {
             RECIPE_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(
-            "ui://tandoor/recipe-gallery-v9.html",
+            "ui://tandoor/recipe-gallery-v10.html",
             MEAL_PLAN_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(
