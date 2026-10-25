@@ -1991,13 +1991,48 @@ pub struct TandoorMcpServer {
 
 /// Current widget resource URIs. ChatGPT treats a URI as an immutable cache key,
 /// so the version suffix must be bumped whenever the widget HTML changes.
-const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v11.html";
-const MEAL_PLAN_GALLERY_URI: &str = "ui://tandoor/meal-plan-gallery-v15.html";
+const RECIPE_GALLERY_URI: &str = "ui://tandoor/recipe-gallery-v12.html";
+const MEAL_PLAN_GALLERY_URI: &str = "ui://tandoor/meal-plan-gallery-v16.html";
 /// `read_resource` serves the current HTML for any `ui://tandoor/<widget>*.html`
 /// URI, so a client holding a stale cached tool descriptor still gets a working
 /// widget instead of an "unknown resource" error.
 const RECIPE_GALLERY_URI_PREFIX: &str = "ui://tandoor/recipe-gallery";
 const MEAL_PLAN_GALLERY_URI_PREFIX: &str = "ui://tandoor/meal-plan-gallery";
+
+/// Insertion markers the widget HTML files use for the shared fragments.
+const SHARED_CSS_MARKER: &str = "/* @include shared.css */";
+const SHARED_JS_MARKER: &str = "// @include shared.js";
+
+/// Assemble a widget document by inlining `widget/shared.css` and
+/// `widget/shared.js` at their markers.
+///
+/// Both galleries render the same card and talk to the host the same way, so
+/// that code lives once in the shared files and each HTML file keeps only its
+/// own layout and copy. The sources are compile-time constants, so the result
+/// is built on first use and cached for the life of the process. Missing
+/// markers are a programming error and panic here rather than serving a widget
+/// without styles or plumbing.
+fn widget_html(template: &'static str, cache: &'static OnceLock<String>) -> &'static str {
+    cache.get_or_init(|| {
+        assert!(
+            template.contains(SHARED_CSS_MARKER) && template.contains(SHARED_JS_MARKER),
+            "widget template must contain both @include markers"
+        );
+        template
+            .replace(SHARED_CSS_MARKER, include_str!("widget/shared.css"))
+            .replace(SHARED_JS_MARKER, include_str!("widget/shared.js"))
+    })
+}
+
+fn recipe_gallery_html() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    widget_html(include_str!("widget/recipe_gallery.html"), &CACHE)
+}
+
+fn meal_plan_gallery_html() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    widget_html(include_str!("widget/meal_plan_gallery.html"), &CACHE)
+}
 
 /// True for `<prefix>.html` and `<prefix>-v<N>.html` style URIs.
 fn widget_uri_matches(uri: &str, prefix: &str) -> bool {
@@ -6954,13 +6989,10 @@ impl ServerHandler for TandoorMcpServer {
         // Any version of a known widget URI resolves to the current HTML; the
         // requested URI is echoed back so the client's cache key stays consistent.
         let widget = if widget_uri_matches(&request.uri, RECIPE_GALLERY_URI_PREFIX) {
-            Some((
-                include_str!("widget/recipe_gallery.html"),
-                self.gallery_resource_meta(),
-            ))
+            Some((recipe_gallery_html(), self.gallery_resource_meta()))
         } else if widget_uri_matches(&request.uri, MEAL_PLAN_GALLERY_URI_PREFIX) {
             Some((
-                include_str!("widget/meal_plan_gallery.html"),
+                meal_plan_gallery_html(),
                 self.meal_plan_gallery_resource_meta(),
             ))
         } else {
@@ -6986,6 +7018,20 @@ impl ServerHandler for TandoorMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn widget_html_inlines_shared_fragments() {
+        for html in [recipe_gallery_html(), meal_plan_gallery_html()] {
+            assert!(!html.contains(SHARED_CSS_MARKER));
+            assert!(!html.contains(SHARED_JS_MARKER));
+            // One representative line from each shared file.
+            assert!(html.contains("grid-template-columns: minmax(210px, 36%)"));
+            assert!(html.contains("function createGallery(config)"));
+            assert!(html.contains("gallery.start();"));
+        }
+        assert!(recipe_gallery_html().contains("tandoor-recipe-gallery"));
+        assert!(meal_plan_gallery_html().contains("tandoor-meal-plan-gallery"));
+    }
 
     #[test]
     fn keyword_names_lists_source_keyword_first() {
@@ -7058,7 +7104,7 @@ mod tests {
             RECIPE_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(
-            "ui://tandoor/recipe-gallery-v11.html",
+            "ui://tandoor/recipe-gallery-v12.html",
             MEAL_PLAN_GALLERY_URI_PREFIX
         ));
         assert!(!widget_uri_matches(

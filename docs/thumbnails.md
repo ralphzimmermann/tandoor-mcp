@@ -274,7 +274,7 @@ URLs only in `_meta`, ~11 KB result) but the inline panel stayed blank until
 the browser window was resized. Server-side logging ruled out the data path;
 widget-side logging traced it to iframe sizing (see "Height reporting" in
 `mcp.md`). v14 reports the height through `window.openai.notifyIntrinsicWidth`
-as well as the MCP Apps notification; the recipe gallery (v8) carries the same
+as well as the MCP Apps notification; the recipe gallery carries the same
 fix. ChatGPT caches the connector snapshot, so
 after deploying a new widget URI use Settings → Apps & Connectors → Tandoor →
 Actions → Refresh app before testing.

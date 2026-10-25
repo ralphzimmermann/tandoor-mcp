@@ -231,11 +231,11 @@ full-size attachment and `image: none` omits it. `get_recipe_gallery` generates
 or reuses thumbnails, returns short-lived private URLs in widget-only `_meta`,
 lists each recipe's name, `recipe_url`, `description`, `servings`, times, and
 `keywords` in the structured content, and binds the result to
-`ui://tandoor/recipe-gallery-v11.html`. The recipe widget renders the same
+`ui://tandoor/recipe-gallery-v12.html`. The recipe widget renders the same
 photo-plus-content card as the meal-plan widget (name, description, all
 keywords as tags, servings and time row), minus the day grouping, meal-type
-badge, and plan note; keep the two card styles in sync when changing either
-file. Every recipe view (`search_recipes`, `get_recipe_details`, both
+badge, and plan note; see "Widget source layout" below for how the shared card
+code is organised. Every recipe view (`search_recipes`, `get_recipe_details`, both
 galleries, `update_recipe` results) orders keywords through `keyword_names()`,
 which moves "source" keywords (description or name starting with "Source",
 the kitchen's convention for a recipe's origin) to the front and otherwise
@@ -243,7 +243,7 @@ preserves Tandoor's order; the widgets render in that order. The server
 advertises the MCP resources capability and serves that URI as
 `text/html;profile=mcp-app`; ChatGPT renders the component inline.
 `get_meal_plan_gallery` similarly binds a complete date-range result to
-`ui://tandoor/meal-plan-gallery-v15.html`, keeping meal metadata, recipe summaries,
+`ui://tandoor/meal-plan-gallery-v16.html`, keeping meal metadata, recipe summaries,
 tags, servings, and photos in one authoritative card gallery instead of relying
 on the client to reconstruct the layout from separate tool calls.
 `get_recipe_image` returns one thumbnail or original image on demand.
@@ -314,20 +314,43 @@ the panel out. The host ignored `ui/notifications/size-changed` (with or without
 `window.openai.notifyIntrinsicWidth(n)` instead. `notifyHeight()` therefore
 sends the size-changed notification and also calls whichever
 `notifyIntrinsic*` function exists with a numeric height clamped to
-`window.openai.maxHeight`. Both widgets (`recipe_gallery.html` and
-`meal_plan_gallery.html`) share this implementation; keep that call when editing
-either one.
+`window.openai.maxHeight`. `notifyHeight()` lives in `widget/shared.js`; keep
+that call when editing it.
 
 Display mode: both widgets advertise `["inline", "fullscreen"]` (resource
 `_meta` and the `ui/initialize` handshake), and ChatGPT then opens them in its
 side pane (`displayMode: "fullscreen"`), with the same component rendering
 inline once the pane is closed. To default to inline without losing the pane,
-each widget calls `preferInline()` once, after `ui/initialize` or the first
-`openai:set_globals` that reports a non-inline mode: it sends
+`preferInline()` in `shared.js` looks at the first display mode the host
+reports (from the `ui/initialize` result or the first `openai:set_globals`
+that carries one) and, if it is not `inline`, sends
 `ui/request-display-mode { mode: "inline" }` and `window.openai.requestDisplayMode`.
-The host may refuse; the request is never repeated, so a manual expand sticks.
-If ChatGPT ignores the request or the pane visibly flickers shut, the fallback is
-to advertise `["inline"]` only, accepting that the pane may disappear.
+Only that first mode is ever considered: a later mode change is the user
+expanding the pane, and must not be undone. The host may refuse the request.
+If ChatGPT ignores it or the pane visibly flickers shut, the fallback is to
+advertise `["inline"]` only, accepting that the pane may disappear.
+
+### Widget source layout
+
+The two widgets share one card design and one host protocol, so that code is
+written once:
+
+- `src/widget/shared.css`: card, tag, and meta-row styles plus the mobile
+  breakpoint.
+- `src/widget/shared.js`: `createGallery(config)`, which owns the host
+  plumbing (`ui/initialize`, `openai:set_globals`, tool-result delivery, direct
+  fetch fallback, expired-URL refresh, height reporting, display mode) and the
+  card helpers (`photo`, `nameLink`, `tags`, `metaRow`, `mergeGalleryData`).
+- `src/widget/recipe_gallery.html` and `meal_plan_gallery.html`: only their own
+  styles, status copy, `fetchInput`/`refreshInput` argument builders, and
+  `render()`, which returns the merged data so the host can track it.
+
+The HTML files contain `/* @include shared.css */` and `// @include shared.js`
+markers; `widget_html()` in `server.rs` replaces them with the shared files at
+first use and caches the result, so the served document is still a single
+self-contained HTML resource. The HTML files are therefore not runnable on their
+own: preview them through the server, or paste the shared files in by hand. Any
+change to a shared file changes both widgets, so bump both URIs.
 
 The meal-plan component groups cards by day (locale-formatted heading via
 `Intl.DateTimeFormat` and `window.openai.locale`), hides a plan title that
