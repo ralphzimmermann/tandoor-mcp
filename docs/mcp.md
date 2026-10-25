@@ -33,7 +33,12 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
 - `TANDOOR_PASSWORD`: password for that account; default `admin`.
 - `TANDOOR_AUTH_TOKEN`: reusable Tandoor token supported by the server API.
   Blank values are treated as unset so Compose can fall back to
-  username/password authentication.
+  username/password authentication. Tandoor 2.7 removed the
+  `/api-token-auth/` endpoint that the fallback uses, so against 2.7 or later a
+  token is required; create it in Tandoor under Settings → API. CI mints its
+  token the same way Tandoor did, as an `oauth2_provider.AccessToken` with a
+  `tda_` prefix and `read write app` scope, from the Django shell (see
+  `.github/workflows/ci.yml`).
 - `BIND_ADDR`: listen address; default `127.0.0.1:3001`.
 - `MCP_ALLOWED_HOSTS`: comma-separated hosts accepted by the transport's
   DNS-rebinding protection; defaults to loopback hosts. The Compose deployment
@@ -229,14 +234,51 @@ When S3 thumbnails are configured, `get_recipe_details` attaches a bounded
 thumbnail by default; `image: original` explicitly requests the existing
 full-size attachment and `image: none` omits it. `get_recipe_gallery` generates
 or reuses thumbnails, returns short-lived private URLs in widget-only `_meta`,
-and binds the result to `ui://tandoor/recipe-gallery-v7.html`. The server
+lists each recipe's name, `recipe_url`, `description`, `servings`, times, and
+`keywords` in the structured content, and binds the result to
+`ui://tandoor/recipe-gallery-v12.html`. The recipe widget renders the same
+photo-plus-content card as the meal-plan widget (name, description, all
+keywords as tags, servings and time row), minus the day grouping, meal-type
+badge, and plan note; see "Widget source layout" below for how the shared card
+code is organised. Every recipe view (`search_recipes`, `get_recipe_details`, both
+galleries, `update_recipe` results) orders keywords through `keyword_names()`,
+which moves "source" keywords (description or name starting with "Source",
+the kitchen's convention for a recipe's origin) to the front and otherwise
+preserves Tandoor's order; the widgets render in that order. The server
 advertises the MCP resources capability and serves that URI as
 `text/html;profile=mcp-app`; ChatGPT renders the component inline.
 `get_meal_plan_gallery` similarly binds a complete date-range result to
-`ui://tandoor/meal-plan-gallery-v10.html`, keeping meal metadata, recipe summaries,
+`ui://tandoor/meal-plan-gallery-v16.html`, keeping meal metadata, recipe summaries,
 tags, servings, and photos in one authoritative card gallery instead of relying
 on the client to reconstruct the layout from separate tool calls.
 `get_recipe_image` returns one thumbnail or original image on demand.
+
+The component is the only way a photo reaches the ChatGPT user. Runtime logs
+from hosted ChatGPT confirmed that MCP `image` content blocks returned by
+`get_recipe_image`/`get_recipe_details` are delivered but shown only to the
+model, never rendered in the chat, and that Markdown `![..](url)` written by
+the model renders as a grey placeholder. Making the thumbnail bucket public
+would not change either behaviour, so it stays private.
+
+Because of that, the gallery is not reserved for explicit photo requests. The
+server instructions, the `search_recipes` and `get_recipe_gallery`
+descriptions, and the `image_instruction` in search results all tell the model
+to call `get_recipe_gallery` with the ids of whatever recipes it is about to
+present (a question like "do I have a pudding recipe that works with almond
+milk?" otherwise ends in a text-only answer). The exceptions are
+`has_photo: false` cleanup searches, whose `image_instruction` omits the
+gallery hint, and users who ask for text only.
+
+ChatGPT also decorates prose with its own pictures: when the model lists the
+recipes next to a gallery, the host's "rich list" renderer attaches thumbnails
+from ChatGPT's web image search, so the chat showed stock photos of the dishes
+beside the gallery's real ones. The server cannot block that renderer; the
+server instructions, both gallery `message` fields, and every
+`image_instruction` therefore tell the model to summarize in Markdown with
+linked recipe names but no images of any kind after a gallery, and never to
+re-fetch photos with `get_recipe_image`. Avoid the phrase "plain text": the
+model reads it as "no Markdown" and drops the recipe links. This is model guidance, not an enforced contract; if the
+behaviour persists, disable web search for the conversation on the ChatGPT side.
 
 Gallery results intentionally contain no inline image blocks. An earlier
 version attached up to 12 base64 JPEG thumbnails (about 500 KB per result) as a
@@ -266,6 +308,54 @@ names the current phase ("Connecting to ChatGPT…", "Waiting for your meal
 plan…", "Loading your meal plan…"), so a stuck widget tells you where the
 hand-off failed; a failed self-fetch ends in an explicit error instead of an
 indefinite loading state.
+
+Height reporting must use ChatGPT's bridge, not only the MCP Apps protocol.
+Widget-side logging in hosted ChatGPT showed the inline iframe stuck at 0×0 for
+the whole turn (content rendered, images loaded, `ui/notifications/tool-result`
+received within ~100 ms) until a browser window resize forced the host to lay
+the panel out. The host ignored `ui/notifications/size-changed` (with or without
+`width`), answered `ui/request-display-mode` without resizing, and had no
+`window.openai.notifyIntrinsicHeight` despite the Apps SDK docs; it exposes
+`window.openai.notifyIntrinsicWidth(n)` instead. `notifyHeight()` therefore
+sends the size-changed notification and also calls whichever
+`notifyIntrinsic*` function exists with a numeric height clamped to
+`window.openai.maxHeight`. `notifyHeight()` lives in `widget/shared.js`; keep
+that call when editing it.
+
+Display mode: both widgets advertise `["inline", "fullscreen"]` (resource
+`_meta` and the `ui/initialize` handshake), and ChatGPT then opens them in its
+side pane (`displayMode: "fullscreen"`), with the same component rendering
+inline once the pane is closed. To default to inline without losing the pane,
+`preferInline()` in `shared.js` looks at the first display mode the host
+reports (from the `ui/initialize` result or the first `openai:set_globals`
+that carries one) and, if it is not `inline`, sends
+`ui/request-display-mode { mode: "inline" }` and `window.openai.requestDisplayMode`.
+Only that first mode is ever considered: a later mode change is the user
+expanding the pane, and must not be undone. The host may refuse the request.
+If ChatGPT ignores it or the pane visibly flickers shut, the fallback is to
+advertise `["inline"]` only, accepting that the pane may disappear.
+
+### Widget source layout
+
+The two widgets share one card design and one host protocol, so that code is
+written once:
+
+- `src/widget/shared.css`: card, tag, and meta-row styles plus the mobile
+  breakpoint.
+- `src/widget/shared.js`: `createGallery(config)`, which owns the host
+  plumbing (`ui/initialize`, `openai:set_globals`, tool-result delivery, direct
+  fetch fallback, expired-URL refresh, height reporting, display mode) and the
+  card helpers (`photo`, `nameLink`, `tags`, `metaRow`, `mergeGalleryData`).
+- `src/widget/recipe_gallery.html` and `meal_plan_gallery.html`: only their own
+  styles, status copy, `fetchInput`/`refreshInput` argument builders, and
+  `render()`, which returns the merged data so the host can track it.
+
+The HTML files contain `/* @include shared.css */` and `// @include shared.js`
+markers; `widget_html()` in `server.rs` replaces them with the shared files at
+first use and caches the result, so the served document is still a single
+self-contained HTML resource. The HTML files are therefore not runnable on their
+own: preview them through the server, or paste the shared files in by hand. Any
+change to a shared file changes both widgets, so bump both URIs.
 
 The meal-plan component groups cards by day (locale-formatted heading via
 `Intl.DateTimeFormat` and `window.openai.locale`), hides a plan title that

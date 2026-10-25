@@ -1,0 +1,75 @@
+/* Shared card styling for the Tandoor MCP App widgets.
+   Inlined into each widget's <style> by the server (see widget_html in
+   server.rs) at the `@include shared.css` marker. Widget-specific rules
+   (day sections, meal-type badge, plan note) stay in the widget file. */
+:root {
+  color-scheme: light dark;
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --text: var(--openai-text-color, CanvasText);
+  --muted: var(--openai-secondary-text-color, color-mix(in srgb, CanvasText 62%, transparent));
+  --border: color-mix(in srgb, CanvasText 12%, transparent);
+  --subtle: color-mix(in srgb, CanvasText 6%, transparent);
+  --card: color-mix(in srgb, Canvas 98%, CanvasText 2%);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 18px 20px 24px; color: var(--text); background: transparent; }
+#status { margin: 0; color: var(--muted); font-size: 15px; }
+.cards { display: grid; gap: 16px; }
+.card {
+  display: grid;
+  grid-template-columns: minmax(210px, 36%) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--card);
+  box-shadow: 0 1px 2px color-mix(in srgb, CanvasText 6%, transparent);
+}
+.media { position: relative; min-height: 250px; background: var(--subtle); }
+.image { display: block; width: 100%; height: 100%; min-height: 250px; object-fit: cover; }
+.placeholder { display: grid; place-items: center; color: var(--muted); text-align: center; font-size: 14px; }
+.content { display: flex; min-width: 0; flex-direction: column; gap: 14px; padding: 24px 26px 26px; }
+.heading { display: grid; gap: 6px; }
+.name {
+  display: inline;
+  color: inherit;
+  font-size: clamp(22px, 2.4vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  text-decoration: none;
+  text-wrap: balance;
+}
+.name:hover, .name:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.description { max-width: 70ch; margin: 0; font-size: 16px; line-height: 1.55; }
+.tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag {
+  padding: 6px 11px;
+  border: 1px solid color-mix(in oklch, oklch(0.72 0.13 var(--hue)) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklch, oklch(0.78 0.12 var(--hue)) 26%, Canvas);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.tag.more { border-color: var(--border); background: var(--subtle); color: var(--muted); }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 0; padding-top: 2px; font-size: 15px; line-height: 1.3; color: var(--muted); }
+.meta strong { color: var(--text); font-weight: 650; }
+.dot { color: var(--border); }
+@media (max-width: 560px) {
+  body { padding: 12px; }
+  .cards { gap: 14px; }
+  .card { grid-template-columns: 1fr; border-radius: 16px; }
+  .media, .image { min-height: 0; aspect-ratio: 16 / 10; }
+  .content { gap: 12px; padding: 18px; }
+  .name { font-size: clamp(22px, 7vw, 28px); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .card { transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease; }
+  .card:hover {
+    border-color: color-mix(in srgb, CanvasText 22%, transparent);
+    box-shadow: 0 6px 20px color-mix(in srgb, CanvasText 10%, transparent);
+  }
+}

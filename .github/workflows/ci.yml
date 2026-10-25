@@ -129,7 +129,7 @@ jobs:
             docker logs tandoor 2>&1 || true
             exit 1
           fi
-          docker exec tandoor $PYTHON /opt/recipes/manage.py shell -c "
+          SETUP_OUTPUT=$(docker exec tandoor $PYTHON /opt/recipes/manage.py shell -c "
           from django.contrib.auth import get_user_model
           from django.contrib.auth.models import Group
           from cookbook.models import Space, UserSpace
@@ -155,12 +155,28 @@ jobs:
           for group_name in ('user', 'admin'):
               group, _ = Group.objects.get_or_create(name=group_name)
               user_space.groups.add(group)
-          "
-          TOKEN=$(curl -sf -X POST http://localhost:8080/api-token-auth/ \
-            -H "Content-Type: application/json" \
-            -d '{"username":"testuser","password":"testpass123"}' \
-            | jq -er '.token | select(type == "string" and length > 0)')
+
+          # Tandoor 2.7 removed the /api-token-auth/ endpoint, so mint the API
+          # token the same way that view did: an oauth2_provider AccessToken
+          # with Tandoor's 'tda_' prefix and 'read write app' scope, which
+          # OAuth2Authentication still accepts as a Bearer token.
+          import uuid
+          from django.utils import timezone
+          from oauth2_provider.models import AccessToken
+          token = AccessToken.objects.create(
+              user=u,
+              token='tda_' + str(uuid.uuid4()).replace('-', '_'),
+              expires=timezone.now() + timezone.timedelta(days=1),
+              scope='read write app',
+          )
+          print('CI_TOKEN=' + token.token)
+          ")
+          printf '%s\n' "$SETUP_OUTPUT" | grep -v '^CI_TOKEN=' || true
+          TOKEN=$(printf '%s\n' "$SETUP_OUTPUT" | sed -n 's/^CI_TOKEN=//p' | tail -n 1)
           test -n "$TOKEN"
+          # Prove the token works before spending time on the test build.
+          curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/space/ -o /dev/null
+          echo "::add-mask::$TOKEN"
           echo "TANDOOR_AUTH_TOKEN=$TOKEN" >> $GITHUB_ENV
 
       - name: Run integration tests
