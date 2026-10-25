@@ -55,7 +55,10 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
   compatible service. See [S3 thumbnails and inline gallery](thumbnails.md).
 - `THUMBNAIL_URL_TTL_SECS`: presigned thumbnail lifetime; default 86400.
 - `THUMBNAIL_MAX_EDGE`: generated JPEG longest edge; default 512.
-- `RUST_LOG`: tracing filter; default `info`.
+- `RUST_LOG`: tracing filter; default `info`. At `info` every `tools/call`
+  logs one line on entry (tool name and argument keys, never values) and one on
+  exit (ok / tool error / rejected), so a ChatGPT call that fails before it
+  reaches Tandoor is still visible in `docker logs`.
 
 Keep the local default bind unless a reverse proxy or container network needs a
 different address. A public deployment must terminate HTTPS before this
@@ -219,8 +222,12 @@ listed in `_meta["openai/fileParams"]`, so ChatGPT fills it with
 `{download_url, file_id, mime_type?, file_name?}` where `download_url` is a
 short-lived signed URL on OpenAI's file host. The Apps SDK validates that
 schema strictly (all four properties declared as plain strings, exactly
-`download_url` and `file_id` required), which the `ChatFile` type and a unit
-test pin down. Both tools share `store_recipe_image()`, so the signed URL goes
+`download_url` and `file_id` required, nothing nullable or defaulted), so
+`ChatFile` implements `JsonSchema` by hand to reproduce the SDK template, and a
+unit test pins the emitted shape. The model is told in the schema and
+instructions to let ChatGPT fill the object in: a hand-built `/mnt/data/...`
+path or `sandbox:` URL never reaches this server; ChatGPT rejects it on its
+side before the call is made. Both tools share `store_recipe_image()`, so the signed URL goes
 through the same SSRF-safe downloader as a user-supplied link. Known host
 limitation: the ChatGPT mobile apps send a placeholder string (`"chat_upload"`,
 `"attached"`) instead of the file object; the tool detects that and returns an

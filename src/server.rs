@@ -45,7 +45,7 @@ use rmcp::model::ContentBlock as Content;
 ///
 /// The opening paragraph is deliberately self-contained because ChatGPT gives the
 /// first 512 characters of MCP instructions special prominence.
-pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. Whenever you present one or more recipes to the user (for example after search_recipes), call get_recipe_gallery with their ids before answering so the photos render inline, even if the user did not ask for images; skip it only for has_photo: false cleanup searches or when the user asks for text only. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Recipe photos: set_recipe_image takes a public HTTPS image URL; set_recipe_image_from_file takes a photo attached to the chat (uploaded by the user or generated here), so never tell the user an attachment cannot be used. Both accept JPEG, PNG, WebP, or GIF up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
+pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. Whenever you present one or more recipes to the user (for example after search_recipes), call get_recipe_gallery with their ids before answering so the photos render inline, even if the user did not ask for images; skip it only for has_photo: false cleanup searches or when the user asks for text only. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Recipe photos: set_recipe_image takes a public HTTPS image URL; set_recipe_image_from_file takes a photo attached to the chat (uploaded by the user or generated here): pass the attachment itself as the image argument and ChatGPT fills in the file object; never pass a /mnt/data path, sandbox: URL, or hand-built object, and never tell the user an attachment cannot be used. Both accept JPEG, PNG, WebP, or GIF up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
 
 // Parameter structs for tools
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1793,36 +1793,55 @@ pub struct SetRecipeImageParams {
     pub image_url: String,
 }
 
-/// A file that ChatGPT attached to the conversation (user upload or generated
+/// A file ChatGPT attached to the conversation (user upload or generated
 /// image), as passed to tools listed in `_meta["openai/fileParams"]`.
 ///
-/// The shape is dictated by the ChatGPT Apps SDK: all four properties must be
-/// declared, exactly `download_url` and `file_id` must be required, and the
-/// optional ones must be plain strings (not nullable), or the host rejects the
-/// tool. `download_url` is a short-lived signed HTTPS URL that the regular
-/// public-image downloader can fetch.
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-#[schemars(deny_unknown_fields)]
+/// The JSON schema is written by hand (see the `JsonSchema` impl below) so it
+/// matches the Apps SDK template exactly: all four properties declared as plain
+/// `string`, exactly `download_url` and `file_id` required, no
+/// `additionalProperties`. A derive cannot express "optional but not nullable
+/// and without a default": `#[serde(default)]` adds `"default": null`, and
+/// `Option<String>` adds a null type, both of which deviate from the template
+/// the host validates against. `download_url` is a short-lived signed HTTPS
+/// URL that the regular public-image downloader can fetch.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChatFile {
-    /// Temporary signed HTTPS URL supplied by ChatGPT.
     pub download_url: String,
-    /// ChatGPT file identifier.
     pub file_id: String,
-    #[serde(default)]
-    #[schemars(with = "String")]
     pub mime_type: Option<String>,
-    #[serde(default)]
-    #[schemars(with = "String")]
     pub file_name: Option<String>,
+}
+
+impl schemars::JsonSchema for ChatFile {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ChatFile")
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "description": "A photo attached to the ChatGPT conversation. ChatGPT fills this in; do not construct it by hand.",
+            "properties": {
+                "download_url": { "type": "string", "description": "Temporary signed HTTPS URL supplied by ChatGPT." },
+                "file_id": { "type": "string", "description": "ChatGPT file identifier." },
+                "mime_type": { "type": "string", "description": "MIME type, when ChatGPT knows it." },
+                "file_name": { "type": "string", "description": "Original file name, when ChatGPT knows it." }
+            },
+            "required": ["download_url", "file_id"],
+            "additionalProperties": false
+        })
+    }
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SetRecipeImageFromFileParams {
     /// Recipe ID
     pub recipe_id: i32,
-    /// The photo attached to the chat. Accepted as a raw value so that the
-    /// placeholder strings some ChatGPT clients send instead of a file object
-    /// can be turned into a useful error rather than a schema failure.
+    /// The photo attached to the chat. Pass the attachment; ChatGPT supplies the file object. Not a /mnt/data path or sandbox: URL.
+    // Typed as a raw value so that the placeholder strings some ChatGPT
+    // clients send instead of a file object become a useful error rather
+    // than a deserialization failure; the schema is still the `ChatFile` object.
     #[schemars(with = "ChatFile")]
     pub image: serde_json::Value,
 }
@@ -7070,6 +7089,36 @@ impl ServerHandler for TandoorMcpServer {
         Cow::Borrowed(&[ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25])
     }
 
+    /// Same dispatch as the `#[tool_handler]` default, plus one INFO line per
+    /// call (tool name, argument keys, outcome). Argument values are not
+    /// logged: they can contain signed download URLs and recipe text. Without
+    /// this line, a `tools/call` that fails before touching Tandoor leaves no
+    /// trace, which made it impossible to tell whether ChatGPT reached the
+    /// server at all when its file hand-off failed.
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        let tool = request.name.clone();
+        let arg_keys: Vec<String> = request
+            .arguments
+            .as_ref()
+            .map(|args| args.keys().cloned().collect())
+            .unwrap_or_default();
+        tracing::info!(%tool, ?arg_keys, "tools/call");
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let result = self.tool_router.call(tcc).await;
+        match &result {
+            Err(error) => tracing::warn!(%tool, %error, "tools/call rejected"),
+            Ok(CallToolResponse::Complete(result)) if result.is_error == Some(true) => {
+                tracing::warn!(%tool, "tools/call returned a tool error")
+            }
+            Ok(_) => tracing::info!(%tool, "tools/call ok"),
+        }
+        result
+    }
+
     fn discover(
         &self,
         _context: RequestContext<RoleServer>,
@@ -7170,10 +7219,19 @@ mod tests {
         };
         assert_eq!(file["type"], "object", "{file}");
         for property in ["download_url", "file_id", "mime_type", "file_name"] {
+            let spec = &file["properties"][property];
             assert_eq!(
-                file["properties"][property]["type"], "string",
+                spec["type"], "string",
                 "{property} must be a plain string: {file}"
             );
+            // The SDK template has only `type` (plus text); a `"default": null`
+            // from `#[serde(default)]` or an `anyOf` from `Option` would differ.
+            for forbidden in ["default", "anyOf", "oneOf", "nullable"] {
+                assert!(
+                    spec.get(forbidden).is_none(),
+                    "{property} must not declare `{forbidden}`: {spec}"
+                );
+            }
         }
         let required: std::collections::BTreeSet<_> = file["required"]
             .as_array()
