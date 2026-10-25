@@ -45,7 +45,7 @@ use rmcp::model::ContentBlock as Content;
 ///
 /// The opening paragraph is deliberately self-contained because ChatGPT gives the
 /// first 512 characters of MCP instructions special prominence.
-pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. Whenever you present one or more recipes to the user (for example after search_recipes), call get_recipe_gallery with their ids before answering so the photos render inline, even if the user did not ask for images; skip it only for has_photo: false cleanup searches or when the user asks for text only. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Image imports accept only public HTTPS images up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
+pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. Whenever you present one or more recipes to the user (for example after search_recipes), call get_recipe_gallery with their ids before answering so the photos render inline, even if the user did not ask for images; skip it only for has_photo: false cleanup searches or when the user asks for text only. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Recipe photos: set_recipe_image takes a public HTTPS image URL; set_recipe_image_from_file takes a photo attached to the chat (uploaded by the user or generated here), so never tell the user an attachment cannot be used. Both accept JPEG, PNG, WebP, or GIF up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
 
 // Parameter structs for tools
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1793,6 +1793,40 @@ pub struct SetRecipeImageParams {
     pub image_url: String,
 }
 
+/// A file that ChatGPT attached to the conversation (user upload or generated
+/// image), as passed to tools listed in `_meta["openai/fileParams"]`.
+///
+/// The shape is dictated by the ChatGPT Apps SDK: all four properties must be
+/// declared, exactly `download_url` and `file_id` must be required, and the
+/// optional ones must be plain strings (not nullable), or the host rejects the
+/// tool. `download_url` is a short-lived signed HTTPS URL that the regular
+/// public-image downloader can fetch.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ChatFile {
+    /// Temporary signed HTTPS URL supplied by ChatGPT.
+    pub download_url: String,
+    /// ChatGPT file identifier.
+    pub file_id: String,
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub file_name: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SetRecipeImageFromFileParams {
+    /// Recipe ID
+    pub recipe_id: i32,
+    /// The photo attached to the chat. Accepted as a raw value so that the
+    /// placeholder strings some ChatGPT clients send instead of a file object
+    /// can be turned into a useful error rather than a schema failure.
+    #[schemars(with = "ChatFile")]
+    pub image: serde_json::Value,
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RemoveRecipeImageParams {
     /// Recipe ID
@@ -2059,6 +2093,21 @@ fn gallery_tool_meta() -> MetaObject {
     )
 }
 
+/// Marks `image` as a file input so ChatGPT fills it with a `ChatFile` for an
+/// attachment instead of asking the user for a URL.
+fn file_image_tool_meta() -> MetaObject {
+    MetaObject(
+        json!({
+            "openai/fileParams": ["image"],
+            "openai/toolInvocation/invoking": "Uploading recipe photo",
+            "openai/toolInvocation/invoked": "Recipe photo updated"
+        })
+        .as_object()
+        .expect("static file tool metadata must be an object")
+        .clone(),
+    )
+}
+
 fn meal_plan_gallery_tool_meta() -> MetaObject {
     MetaObject(
         json!({
@@ -2279,7 +2328,7 @@ impl TandoorMcpServer {
 
     // Recipe tools
     #[tool(
-        description = "Search for recipes with flexible querying. Each result has `has_photo`; pass has_photo: false to list recipes missing a photo (e.g. to add photos with set_recipe_image). When presenting results to the user, call get_recipe_gallery with their ids so the authoritative photos render inline, even if photos were not requested; use get_recipe_details only for ingredients, steps, or nutrition.",
+        description = "Search for recipes with flexible querying. Each result has `has_photo`; pass has_photo: false to list recipes missing a photo (e.g. to add photos with set_recipe_image or set_recipe_image_from_file). When presenting results to the user, call get_recipe_gallery with their ids so the authoritative photos render inline, even if photos were not requested; use get_recipe_details only for ingredients, steps, or nutrition.",
         annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn search_recipes(
@@ -5385,7 +5434,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Set a recipe's photo from a public HTTPS image URL. The URL must point directly at a JPEG, PNG, WebP, or GIF file (not a web page). Private/reserved hosts are rejected and downloads are limited to 20 MB. Replaces any existing photo.",
+        description = "Set a recipe's photo from a public HTTPS image URL. The URL must point directly at a JPEG, PNG, WebP, or GIF file (not a web page). Private/reserved hosts are rejected and downloads are limited to 20 MB. Replaces any existing photo. For a photo attached to the chat, use set_recipe_image_from_file instead.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -5397,21 +5446,83 @@ impl TandoorMcpServer {
         &self,
         Parameters(params): Parameters<SetRecipeImageParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.store_recipe_image(params.recipe_id, params.image_url.trim(), "url")
+            .await
+    }
+
+    #[tool(
+        description = "Set a recipe's photo from an image attached to this chat: a photo the user uploaded or an image generated in the conversation. Use this instead of set_recipe_image whenever the photo is an attachment rather than a public URL. JPEG, PNG, WebP, or GIF up to 20 MB. Replaces any existing photo.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        meta = file_image_tool_meta()
+    )]
+    async fn set_recipe_image_from_file(
+        &self,
+        Parameters(params): Parameters<SetRecipeImageFromFileParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Some ChatGPT clients (observed on the mobile apps) send a placeholder
+        // string such as "chat_upload" or "attached" instead of the file object.
+        // Name the problem so the model can tell the user what to do.
+        let file: ChatFile = match serde_json::from_value(params.image.clone()) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!(
+                    recipe_id = params.recipe_id,
+                    value = %params.image,
+                    %error,
+                    "set_recipe_image_from_file received no usable file object"
+                );
+                return tool_err(
+                    "The attached photo was not handed over",
+                    "ChatGPT sent a placeholder instead of the file. This happens in the ChatGPT mobile apps; retry from the web or desktop app, or provide a public HTTPS image URL for set_recipe_image.",
+                );
+            }
+        };
+        tracing::info!(
+            recipe_id = params.recipe_id,
+            file_id = %file.file_id,
+            mime_type = file.mime_type.as_deref().unwrap_or("unknown"),
+            file_name = file.file_name.as_deref().unwrap_or("unknown"),
+            "Setting recipe photo from chat attachment"
+        );
+        self.store_recipe_image(params.recipe_id, &file.download_url, "chat_file")
+            .await
+    }
+
+    /// Shared body of the two photo-setting tools: download from a public HTTPS
+    /// URL (a user-supplied link or ChatGPT's signed attachment URL), upload to
+    /// Tandoor, and drop the cached thumbnail of the replaced photo. Failures
+    /// are logged so operators can see why a photo did not land; the tool error
+    /// alone is only visible to the model.
+    async fn store_recipe_image(
+        &self,
+        recipe_id: i32,
+        image_url: &str,
+        source: &'static str,
+    ) -> Result<CallToolResult, McpError> {
         let client = auth_or_return!(self);
-        let recipe = match client.get_recipe(params.recipe_id).await {
+        let recipe = match client.get_recipe(recipe_id).await {
             Ok(r) => r,
             Err(e) => return tool_err("Recipe not found", e),
         };
-        let (bytes, extension) = match client.download_image(params.image_url.trim()).await {
+        let (bytes, extension) = match client.download_image(image_url).await {
             Ok(d) => d,
-            Err(e) => return tool_err("Could not use that image", e),
+            Err(error) => {
+                tracing::warn!(recipe_id, source, %error, "Could not download recipe photo");
+                return tool_err("Could not use that image", error);
+            }
         };
         let size = bytes.len();
-        if let Err(e) = client
+        if let Err(error) = client
             .upload_recipe_image(recipe.id, bytes, extension)
             .await
         {
-            return tool_err("Failed to upload image", e);
+            tracing::warn!(recipe_id, source, %error, "Could not upload recipe photo to Tandoor");
+            return tool_err("Failed to upload image", error);
         }
         if let (Some(thumbnails), Some(previous)) = (&self.thumbnails, recipe.image.as_deref()) {
             if let Err(error) = thumbnails.invalidate(recipe.id, previous).await {
@@ -5423,6 +5534,13 @@ impl TandoorMcpServer {
             .await
             .ok()
             .and_then(|r| r.image);
+        tracing::info!(
+            recipe_id,
+            source,
+            format = extension,
+            bytes = size,
+            "Recipe photo updated"
+        );
         tool_ok(json!({
             "recipe": recipe.name,
             "image": image,
@@ -7019,6 +7137,67 @@ impl ServerHandler for TandoorMcpServer {
 mod tests {
     use super::*;
 
+    /// The ChatGPT Apps SDK rejects file-param schemas that deviate from its
+    /// template; this pins the generated schema to that template.
+    #[test]
+    fn set_recipe_image_from_file_declares_a_valid_file_param() {
+        let tool = TandoorMcpServer::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "set_recipe_image_from_file")
+            .expect("tool should be registered");
+        let meta = serde_json::to_value(tool.meta.as_ref().expect("tool meta")).unwrap();
+        assert_eq!(meta["openai/fileParams"], json!(["image"]));
+
+        let schema = serde_json::to_value(&*tool.input_schema).unwrap();
+        assert!(schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("image")));
+        // The property may be inlined or a $ref into $defs/definitions.
+        let property = schema["properties"]["image"].clone();
+        let file = match property["$ref"].as_str().map(str::to_owned) {
+            Some(reference) => {
+                let name = reference.rsplit('/').next().unwrap();
+                let def = &schema["$defs"][name];
+                if def.is_null() {
+                    schema["definitions"][name].clone()
+                } else {
+                    def.clone()
+                }
+            }
+            None => property,
+        };
+        assert_eq!(file["type"], "object", "{file}");
+        for property in ["download_url", "file_id", "mime_type", "file_name"] {
+            assert_eq!(
+                file["properties"][property]["type"], "string",
+                "{property} must be a plain string: {file}"
+            );
+        }
+        let required: std::collections::BTreeSet<_> = file["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(required, ["download_url", "file_id"].into_iter().collect());
+        assert_eq!(file["additionalProperties"], false);
+    }
+
+    #[test]
+    fn chat_file_rejects_mobile_placeholder_strings() {
+        assert!(serde_json::from_value::<ChatFile>(json!("chat_upload")).is_err());
+        assert!(serde_json::from_value::<ChatFile>(json!("attached")).is_err());
+        let file: ChatFile = serde_json::from_value(json!({
+            "download_url": "https://files.oaiusercontent.com/x?sig=1",
+            "file_id": "file_123"
+        }))
+        .unwrap();
+        assert_eq!(file.file_id, "file_123");
+        assert!(file.mime_type.is_none());
+    }
+
     #[test]
     fn widget_html_inlines_shared_fragments() {
         for html in [recipe_gallery_html(), meal_plan_gallery_html()] {
@@ -7795,7 +7974,7 @@ mod annotation_tests {
     #[test]
     fn every_tool_declares_annotations() {
         let tools = TandoorMcpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 64, "unexpected tool count");
+        assert_eq!(tools.len(), 65, "unexpected tool count");
 
         for tool in &tools {
             let name = tool.name.as_ref();

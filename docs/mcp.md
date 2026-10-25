@@ -115,7 +115,7 @@ Every tool needs an action-oriented description and annotations:
 Update the server instructions when a new tool introduces a required lookup or
 ordering relationship. Keep the first 512 characters self-contained.
 
-The server currently exposes 64 tools. In addition to the original recipe,
+The server currently exposes 65 tools. In addition to the original recipe,
 shopping, pantry, meal-plan, metadata, and cooking-log operations, it supports:
 
 - targeted recipe and ingredient edits, import, deletion, and photos;
@@ -212,7 +212,23 @@ the tool reports `image_error` so retrying does not create a duplicate.
 
 ## Recipe image security
 
-`set_recipe_image` accepts only public HTTPS URLs. The downloader rejects URL
+Two tools set a recipe photo. `set_recipe_image` takes a public HTTPS URL.
+`set_recipe_image_from_file` takes a file attached to the ChatGPT conversation
+(a user upload or an image generated in the chat): its `image` parameter is
+listed in `_meta["openai/fileParams"]`, so ChatGPT fills it with
+`{download_url, file_id, mime_type?, file_name?}` where `download_url` is a
+short-lived signed URL on OpenAI's file host. The Apps SDK validates that
+schema strictly (all four properties declared as plain strings, exactly
+`download_url` and `file_id` required), which the `ChatFile` type and a unit
+test pin down. Both tools share `store_recipe_image()`, so the signed URL goes
+through the same SSRF-safe downloader as a user-supplied link. Known host
+limitation: the ChatGPT mobile apps send a placeholder string (`"chat_upload"`,
+`"attached"`) instead of the file object; the tool detects that and returns an
+error telling the model to retry from web/desktop or use a URL. Without this
+tool the model had no way to use attachments and reported that "the connection
+only accepts publicly accessible HTTPS image URLs".
+
+The downloader behind both tools accepts only public HTTPS URLs. It rejects URL
 credentials and private, loopback, link-local, documentation, and reserved
 addresses; pins each request to a validated DNS result; disables automatic
 redirects and revalidates each redirect; applies a 20-second timeout; verifies
