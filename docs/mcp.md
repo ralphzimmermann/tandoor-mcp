@@ -55,7 +55,10 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
   compatible service. See [S3 thumbnails and inline gallery](thumbnails.md).
 - `THUMBNAIL_URL_TTL_SECS`: presigned thumbnail lifetime; default 86400.
 - `THUMBNAIL_MAX_EDGE`: generated JPEG longest edge; default 512.
-- `RUST_LOG`: tracing filter; default `info`.
+- `RUST_LOG`: tracing filter; default `info`. At `info` every `tools/call`
+  logs one line on entry (tool name and argument keys, never values) and one on
+  exit (ok / tool error / rejected), so a ChatGPT call that fails before it
+  reaches Tandoor is still visible in `docker logs`.
 
 Keep the local default bind unless a reverse proxy or container network needs a
 different address. A public deployment must terminate HTTPS before this
@@ -115,7 +118,7 @@ Every tool needs an action-oriented description and annotations:
 Update the server instructions when a new tool introduces a required lookup or
 ordering relationship. Keep the first 512 characters self-contained.
 
-The server currently exposes 64 tools. In addition to the original recipe,
+The server currently exposes 65 tools. In addition to the original recipe,
 shopping, pantry, meal-plan, metadata, and cooking-log operations, it supports:
 
 - targeted recipe and ingredient edits, import, deletion, and photos;
@@ -212,7 +215,30 @@ the tool reports `image_error` so retrying does not create a duplicate.
 
 ## Recipe image security
 
-`set_recipe_image` accepts only public HTTPS URLs. The downloader rejects URL
+Two tools set a recipe photo. `set_recipe_image` takes a public HTTPS URL.
+`set_recipe_image_from_file` takes a file attached to the ChatGPT conversation
+(a user upload or an image generated in the chat): its `image` parameter is
+listed in `_meta["openai/fileParams"]`, so ChatGPT fills it with
+`{download_url, file_id, mime_type?, file_name?}` where `download_url` is a
+short-lived signed URL on OpenAI's file host. Both tools share
+`store_recipe_image()`, so the signed URL goes through the same SSRF-safe
+downloader as a user-supplied link.
+
+The file schema is the sensitive part. ChatGPT validates it against the Apps
+SDK template before it binds the file: all four properties declared as plain
+`string`, exactly `download_url` and `file_id` required, nothing nullable or
+defaulted. A derived schema with `#[serde(default)]` emitted `"default": null`
+on the optional fields and ChatGPT failed the call on its side ("The tool
+failed internally") without ever contacting this server; `ChatFile` therefore
+implements `JsonSchema` by hand and a unit test pins the emitted shape. The
+schema and instructions also tell the model to pass the attachment itself,
+since a hand-built `/mnt/data/...` path or `sandbox:` URL is rejected by
+ChatGPT before the call. Known host limitation: the ChatGPT mobile apps send a
+placeholder string (`"chat_upload"`, `"attached"`) instead of the file object;
+the tool detects that and returns an error telling the model to retry from
+web/desktop or use a URL.
+
+The downloader behind both tools accepts only public HTTPS URLs. It rejects URL
 credentials and private, loopback, link-local, documentation, and reserved
 addresses; pins each request to a validated DNS result; disables automatic
 redirects and revalidates each redirect; applies a 20-second timeout; verifies

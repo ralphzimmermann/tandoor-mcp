@@ -204,6 +204,7 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
         "add_ingredient_header",
         "set_related_recipe_mealplan_inclusion",
         "set_recipe_image",
+        "set_recipe_image_from_file",
         "remove_recipe_image",
         "delete_recipe",
         "get_recipe_books",
