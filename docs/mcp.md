@@ -220,20 +220,23 @@ Two tools set a recipe photo. `set_recipe_image` takes a public HTTPS URL.
 (a user upload or an image generated in the chat): its `image` parameter is
 listed in `_meta["openai/fileParams"]`, so ChatGPT fills it with
 `{download_url, file_id, mime_type?, file_name?}` where `download_url` is a
-short-lived signed URL on OpenAI's file host. The Apps SDK validates that
-schema strictly (all four properties declared as plain strings, exactly
-`download_url` and `file_id` required, nothing nullable or defaulted), so
-`ChatFile` implements `JsonSchema` by hand to reproduce the SDK template, and a
-unit test pins the emitted shape. The model is told in the schema and
-instructions to let ChatGPT fill the object in: a hand-built `/mnt/data/...`
-path or `sandbox:` URL never reaches this server; ChatGPT rejects it on its
-side before the call is made. Both tools share `store_recipe_image()`, so the signed URL goes
-through the same SSRF-safe downloader as a user-supplied link. Known host
-limitation: the ChatGPT mobile apps send a placeholder string (`"chat_upload"`,
-`"attached"`) instead of the file object; the tool detects that and returns an
-error telling the model to retry from web/desktop or use a URL. Without this
-tool the model had no way to use attachments and reported that "the connection
-only accepts publicly accessible HTTPS image URLs".
+short-lived signed URL on OpenAI's file host. Both tools share
+`store_recipe_image()`, so the signed URL goes through the same SSRF-safe
+downloader as a user-supplied link.
+
+The file schema is the sensitive part. ChatGPT validates it against the Apps
+SDK template before it binds the file: all four properties declared as plain
+`string`, exactly `download_url` and `file_id` required, nothing nullable or
+defaulted. A derived schema with `#[serde(default)]` emitted `"default": null`
+on the optional fields and ChatGPT failed the call on its side ("The tool
+failed internally") without ever contacting this server; `ChatFile` therefore
+implements `JsonSchema` by hand and a unit test pins the emitted shape. The
+schema and instructions also tell the model to pass the attachment itself,
+since a hand-built `/mnt/data/...` path or `sandbox:` URL is rejected by
+ChatGPT before the call. Known host limitation: the ChatGPT mobile apps send a
+placeholder string (`"chat_upload"`, `"attached"`) instead of the file object;
+the tool detects that and returns an error telling the model to retry from
+web/desktop or use a URL.
 
 The downloader behind both tools accepts only public HTTPS URLs. It rejects URL
 credentials and private, loopback, link-local, documentation, and reserved
