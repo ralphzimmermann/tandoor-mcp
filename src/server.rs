@@ -5489,9 +5489,20 @@ impl TandoorMcpServer {
         let file: ChatFile = match serde_json::from_value(params.image.clone()) {
             Ok(file) => file,
             Err(error) => {
+                // Log the shape only: a value could be a signed download URL.
+                let shape = match &params.image {
+                    serde_json::Value::Object(map) => {
+                        format!("object with keys {:?}", map.keys().collect::<Vec<_>>())
+                    }
+                    serde_json::Value::String(s) => format!("string of {} chars", s.len()),
+                    serde_json::Value::Array(items) => format!("array of {} items", items.len()),
+                    serde_json::Value::Null => "null".to_string(),
+                    serde_json::Value::Bool(_) => "boolean".to_string(),
+                    serde_json::Value::Number(_) => "number".to_string(),
+                };
                 tracing::warn!(
                     recipe_id = params.recipe_id,
-                    value = %params.image,
+                    %shape,
                     %error,
                     "set_recipe_image_from_file received no usable file object"
                 );
