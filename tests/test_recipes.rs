@@ -60,6 +60,7 @@ async fn test_create_and_retrieve_recipe() {
     let test_name = format!("Test Recipe {}", chrono::Utc::now().timestamp());
     let create_request = mcp_tandoor::client::types::CreateRecipeRequest {
         name: test_name.clone(),
+        internal: true,
         description: Some("A test recipe created by integration tests".to_string()),
         servings: Some(4),
         working_time: 30,
@@ -90,6 +91,7 @@ async fn test_create_and_retrieve_recipe() {
 
     let created_recipe = create_result.unwrap();
     assert_eq!(created_recipe.name, test_name, "Recipe name should match");
+    assert!(created_recipe.internal, "Created recipe should be internal");
     assert_eq!(created_recipe.servings, Some(4), "Servings should match");
 
     // Retrieve the created recipe

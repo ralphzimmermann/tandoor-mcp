@@ -266,6 +266,10 @@ fn prepare_source_import_recipe(
     let object = recipe
         .as_object_mut()
         .ok_or_else(|| "Tandoor returned a non-object recipe preview".to_string())?;
+    // Source previews may mark recipes as externally managed even when no
+    // external storage is configured. Recipes persisted by this server belong
+    // to Tandoor and must remain fully editable there.
+    object.insert("internal".to_string(), serde_json::Value::Bool(true));
     let image_url = object
         .remove("image_url")
         .and_then(|value| value.as_str().map(str::to_owned));
@@ -2827,7 +2831,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Create a new recipe. Use `steps` to add structured steps, each with the ingredients used in that step (food, unit, amount, note; omit amount for to-taste ingredients) — recommended. `instructions` is a legacy fallback that creates a single step with no ingredients.",
+        description = "Create a new internally managed recipe. Use `steps` to add structured steps, each with the ingredients used in that step (food, unit, amount, note; omit amount for to-taste ingredients) — recommended. `instructions` is a legacy fallback that creates a single step with no ingredients.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2884,6 +2888,7 @@ impl TandoorMcpServer {
 
         let request = crate::client::types::CreateRecipeRequest {
             name: params.name,
+            internal: true,
             description: params.description,
             servings: params.servings,
             working_time: params.prep_time.unwrap_or(0),
@@ -2926,7 +2931,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Import a recipe from a URL. Tandoor will scrape and parse the page. Returns the imported recipe or an error message if the site is not supported.",
+        description = "Import a recipe from a URL as an internally managed Tandoor recipe. Tandoor will scrape and parse the page. Returns the imported recipe or an error message if the site is not supported.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2968,6 +2973,17 @@ impl TandoorMcpServer {
                             "Tandoor returned a recipe ID outside the supported range",
                         );
                     };
+                    if let Err(e) = client
+                        .api_update("recipe", recipe_id, json!({"internal": true}))
+                        .await
+                    {
+                        return tool_err(
+                            "Import partially succeeded",
+                            format!(
+                                "Tandoor created recipe {recipe_id}, but it could not be marked as internally managed: {e}"
+                            ),
+                        );
+                    }
                     return Ok(CallToolResult::success(vec![Content::text(
                         json!({
                             "message": if result.msg.is_empty() { "Recipe imported successfully" } else { &result.msg },
@@ -4938,7 +4954,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Update an existing recipe. Top-level fields (name, description, servings, cooking_time, waiting_time, source_url, source_title) change only what you pass. Keywords/tags: `add_keywords` / `remove_keywords` (by name) change just those; `replace_all_keywords` is a FULL REPLACEMENT of the keyword list. To edit steps, call get_recipe_details first and refer to steps by their step_number: `step_updates` edits specific steps and their ingredients (add_ingredients, remove_ingredients, update_ingredients to change an amount/unit/note/food in place, or replace_ingredients), `add_steps` inserts new steps, `move_steps` reorders, `remove_steps` deletes; all other steps stay untouched. An ingredient entry of {\"header\": \"For the sauce\"} is a section heading. `replace_all_steps` is a FULL REPLACEMENT that deletes every existing step and ingredient — only use it to rewrite the whole recipe. Returns the recipe's resulting steps so you can verify.",
+        description = "Update an existing recipe and mark it as internally managed. Top-level content fields (name, description, servings, cooking_time, waiting_time, source_url, source_title) change only what you pass. Keywords/tags: `add_keywords` / `remove_keywords` (by name) change just those; `replace_all_keywords` is a FULL REPLACEMENT of the keyword list. To edit steps, call get_recipe_details first and refer to steps by their step_number: `step_updates` edits specific steps and their ingredients (add_ingredients, remove_ingredients, update_ingredients to change an amount/unit/note/food in place, or replace_ingredients), `add_steps` inserts new steps, `move_steps` reorders, `remove_steps` deletes; all other steps stay untouched. An ingredient entry of {\"header\": \"For the sauce\"} is a section heading. `replace_all_steps` is a FULL REPLACEMENT that deletes every existing step and ingredient — only use it to rewrite the whole recipe. Returns the recipe's resulting steps so you can verify.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -4961,6 +4977,9 @@ impl TandoorMcpServer {
 
         let mut body = serde_json::Map::new();
         body.insert("id".to_string(), json!(params.id));
+        // Any recipe changed through this server is managed in Tandoor. This
+        // also repairs recipes previously created with `internal: false`.
+        body.insert("internal".to_string(), json!(true));
         if let Some(v) = params.name {
             body.insert("name".to_string(), json!(v));
         }
@@ -7459,6 +7478,7 @@ mod tests {
     fn source_import_preview_becomes_a_create_payload() {
         let preview = json!({
             "name": "Imported Soup",
+            "internal": false,
             "image_url": "https://images.example/soup.jpg",
             "keywords": [
                 {"id": null, "name": "quick", "label": "quick", "import_keyword": true},
@@ -7473,6 +7493,7 @@ mod tests {
             Some("https://images.example/soup.jpg")
         );
         assert!(prepared.get("image_url").is_none());
+        assert_eq!(prepared["internal"], true);
         let keywords = prepared["keywords"].as_array().unwrap();
         assert_eq!(keywords.len(), 1);
         assert_eq!(keywords[0]["name"], "quick");

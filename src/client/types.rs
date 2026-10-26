@@ -579,6 +579,9 @@ pub struct PaginatedResponse<T> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateRecipeRequest {
     pub name: String,
+    /// Tandoor uses this flag to distinguish editable recipes from externally
+    /// managed recipes. MCP-created recipes are always managed in Tandoor.
+    pub internal: bool,
     // Tandoor rejects null for these, so omit them when unset
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
