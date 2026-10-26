@@ -213,6 +213,12 @@ URL imports first parse Tandoor's source preview, then create the recipe and
 attempt its image upload. If the image fails, the recipe remains created and
 the tool reports `image_error` so retrying does not create a duplicate.
 
+Recipes created, imported, or updated through MCP are explicitly written with
+`internal: true`. Tandoor uses that flag—not the presence of `source_url`,
+`file_path`, or external storage—to render its blue “External” badge. Updating
+an older MCP-created recipe therefore also repairs its classification. URL
+imports may retain source attribution while remaining internally managed.
+
 ## Recipe image security
 
 Two tools set a recipe photo. `set_recipe_image` takes a public HTTPS URL.
