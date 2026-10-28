@@ -182,6 +182,11 @@ accept both shapes:
 - Shopping entries embed a slim food object and may omit creator/timestamp
   fields.
 - Recipe ingredients may have no food when they represent a section header.
+- A step's `file` is `null` or a nested `UserFile` object (`id`, `name`,
+  `media_url`, `media_type`, ...), never a path string. A video attached to one
+  step made every `get_recipe_details` call for that recipe fail until
+  `Step.file` became a typed `StepFile`; the field is not exposed in tool
+  output yet.
 - Food recipe references may be a bare ID or a nested recipe summary.
 - Supermarket categories may be nested objects rather than integer ids.
 
