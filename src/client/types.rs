@@ -309,8 +309,9 @@ pub struct Step {
     pub time: Option<i32>,
     /// Display order within the recipe
     pub order: i32,
-    /// Associated media file (image/video)
-    pub file: Option<String>,
+    /// Media file attached to this step, or `None` when there is none.
+    #[serde(default)]
+    pub file: Option<StepFile>,
     /// Markdown-formatted instructions
     #[serde(default)]
     pub instructions_markdown: Option<String>,
@@ -326,6 +327,34 @@ pub struct Step {
     /// Whether to show ingredients in table format
     #[serde(default)]
     pub show_ingredients_table: Option<bool>,
+}
+
+/// A file attached to a recipe step (Tandoor `UserFile`), such as a video or
+/// photo uploaded through the step editor.
+///
+/// Tandoor serializes `step.file` as this nested object, never as a bare path
+/// string. A recipe with any such attachment failed to deserialize while the
+/// field was typed `Option<String>` (production recipe 1647, Oct 2026), so
+/// every field except `id` is optional to tolerate further drift.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepFile {
+    pub id: i32,
+    /// Original upload name, e.g. `IMG_6109.MOV`
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Authenticated download endpoint on the Tandoor origin
+    #[serde(default)]
+    pub file_download: Option<String>,
+    /// Direct media URL (may point at external storage)
+    #[serde(default)]
+    pub media_url: Option<String>,
+    /// `"image"`, `"video"`, or another Tandoor media category
+    #[serde(default)]
+    pub media_type: Option<String>,
+    #[serde(default)]
+    pub preview: Option<String>,
+    #[serde(default)]
+    pub file_size_kb: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

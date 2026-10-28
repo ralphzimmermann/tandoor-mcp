@@ -5,7 +5,7 @@
 
 use mcp_tandoor::client::types::{
     ApiNamedReference, CreateMealPlanRequest, MealPlan, PaginatedResponse, Recipe,
-    ShoppingListEntry,
+    ShoppingListEntry, Step,
 };
 
 #[test]
@@ -47,6 +47,50 @@ fn recipe_search_accepts_nested_created_by() {
     let parsed: PaginatedResponse<Recipe> = serde_json::from_str(json).expect("recipe search");
     assert_eq!(parsed.results[0].id, 1344);
     assert_eq!(parsed.results[0].created_by.as_ref().unwrap().id(), 1);
+}
+
+/// Production recipe 1647 ("Brownie GF") had a video attached to a step. Tandoor
+/// serializes `step.file` as a nested `UserFile` object, which broke
+/// `get_recipe_details` while the field was typed as a string.
+#[test]
+fn recipe_step_accepts_attached_file_object() {
+    let json = r#"{
+      "id": 8814,
+      "name": "Grind, Mix and Shape",
+      "instruction": "Grind the oats.",
+      "ingredients": [],
+      "instructions_markdown": "<p>Grind the oats.</p>",
+      "time": 0,
+      "order": 0,
+      "show_as_header": false,
+      "file": {
+        "id": 22,
+        "name": "IMG_6109.MOV",
+        "file_download": "https://recipes.example/api/download-file/22/",
+        "preview": "",
+        "media_url": "https://assets.example/files/e361981f.MOV",
+        "media_type": "video",
+        "image_thumbnail": null,
+        "image_gallery": null,
+        "file_size_kb": 10109,
+        "created_by": {"id": 1, "username": "lovejump", "display_name": "lovejump"},
+        "created_at": "2026-10-24T19:30:59.947784+02:00"
+      },
+      "step_recipe": null,
+      "step_recipe_data": null,
+      "show_ingredients_table": true
+    }"#;
+
+    let parsed: Step = serde_json::from_str(json).expect("step with attached file");
+    let file = parsed.file.expect("file is present");
+    assert_eq!(file.id, 22);
+    assert_eq!(file.name.as_deref(), Some("IMG_6109.MOV"));
+    assert_eq!(file.media_type.as_deref(), Some("video"));
+
+    let without_file = r#"{"id": 1, "name": "", "instruction": "Mix", "ingredients": [],
+        "time": null, "order": 0, "file": null}"#;
+    let parsed: Step = serde_json::from_str(without_file).expect("step without file");
+    assert!(parsed.file.is_none());
 }
 
 #[test]
