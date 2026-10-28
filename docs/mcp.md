@@ -118,7 +118,7 @@ Every tool needs an action-oriented description and annotations:
 Update the server instructions when a new tool introduces a required lookup or
 ordering relationship. Keep the first 512 characters self-contained.
 
-The server currently exposes 65 tools. In addition to the original recipe,
+The server currently exposes 66 tools. In addition to the original recipe,
 shopping, pantry, meal-plan, metadata, and cooking-log operations, it supports:
 
 - targeted recipe and ingredient edits, import, deletion, and photos;
@@ -166,6 +166,27 @@ Tandoor preserves their amounts, units, notes, and flags.
 `mealplan_autoinclude_related` preference. It is account-wide, not specific to
 one recipe.
 
+## Recipe field coverage
+
+`get_recipe_details`, `create_recipe`, and `update_recipe` share the recipe
+fields that ChatGPT needs to inspect and maintain: name, description, servings,
+`servings_text`, working and waiting time, `source_url`,
+`show_ingredient_overview`, keywords, steps, nutrition, and recipe-level
+properties. Nutrition uses Tandoor's actual `carbohydrates` field and also
+includes its free-text `source`.
+
+Recipe properties refer to existing property types. Call `get_property_types`
+first, then pass a returned ID or exact case-insensitive name; recipe writes
+never create property types implicitly. Updates upsert properties by type and
+can remove selected types without replacing unrelated properties.
+
+Detail and write results also expose read-only metadata: `internal`, image,
+rating, last-cooked time, creator, timestamps, computed `food_properties`, and
+step attachment metadata. `internal` remains forced to `true` for MCP writes.
+Privacy/sharing, diameter fields, storage paths, and generated image variants
+are intentionally not exposed. The former `source_title` update argument was
+removed because it is not a Tandoor recipe field.
+
 ## Tandoor API shape notes
 
 Recent Tandoor responses diverge from older id-only fields. The client types
@@ -185,8 +206,8 @@ accept both shapes:
 - A step's `file` is `null` or a nested `UserFile` object (`id`, `name`,
   `media_url`, `media_type`, ...), never a path string. A video attached to one
   step made every `get_recipe_details` call for that recipe fail until
-  `Step.file` became a typed `StepFile`; the field is not exposed in tool
-  output yet.
+  `Step.file` became a typed `StepFile`; detail output exposes its stable ID,
+  name, and media type.
 - Food recipe references may be a bare ID or a nested recipe summary.
 - Supermarket categories may be nested objects rather than integer ids.
 

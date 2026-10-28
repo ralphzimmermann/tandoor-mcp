@@ -151,9 +151,9 @@ pub struct Recipe {
     /// Original source URL if imported
     #[serde(default)]
     pub source_url: Option<String>,
-    /// Additional recipe properties
+    /// Explicit recipe-level properties (for example nutrition values).
     #[serde(default)]
-    pub properties: Option<Vec<serde_json::Value>>,
+    pub properties: Vec<Property>,
     /// Food-specific properties
     #[serde(default)]
     pub food_properties: Option<serde_json::Value>,
@@ -392,7 +392,7 @@ pub struct Food {
     #[serde(default)]
     pub inherit_fields: Vec<InheritField>,
     #[serde(default)]
-    pub properties: Vec<FoodProperty>,
+    pub properties: Vec<Property>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -423,28 +423,43 @@ pub struct InheritField {
     pub field: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FoodProperty {
-    pub id: i32,
-    pub property_amount: f64,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Property {
+    #[serde(default)]
+    pub id: Option<i32>,
+    #[serde(default)]
+    pub property_amount: Option<f64>,
     pub property_type: PropertyType,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertyType {
     pub id: i32,
     pub name: String,
-    pub unit: String,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub order: i32,
+    #[serde(default)]
     pub fdc_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Nutrition {
+    #[serde(default)]
+    pub id: Option<i32>,
+    #[serde(default)]
     pub calories: Option<f64>,
+    #[serde(default)]
     pub proteins: Option<f64>,
+    #[serde(default)]
     pub fats: Option<f64>,
-    pub carbs: Option<f64>,
+    #[serde(default)]
+    pub carbohydrates: Option<f64>,
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// An entry in a shopping list with food item and purchase details.
@@ -616,10 +631,46 @@ pub struct CreateRecipeRequest {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub servings: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub servings_text: Option<String>,
     pub working_time: i32,
     pub waiting_time: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_ingredient_overview: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nutrition: Option<NutritionRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<PropertyRequest>>,
     pub keywords: Vec<CreateKeywordRequest>,
     pub steps: Vec<CreateStepRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i32>,
+    pub calories: f64,
+    pub carbohydrates: f64,
+    pub fats: f64,
+    pub proteins: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i32>,
+    pub property_amount: Option<f64>,
+    pub property_type: PropertyTypeReference,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyTypeReference {
+    pub id: i32,
+    pub name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

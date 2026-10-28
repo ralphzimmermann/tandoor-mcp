@@ -49,6 +49,54 @@ fn recipe_search_accepts_nested_created_by() {
     assert_eq!(parsed.results[0].created_by.as_ref().unwrap().id(), 1);
 }
 
+#[test]
+fn recipe_detail_accepts_nutrition_and_recipe_properties() {
+    let json = r#"{
+      "id": 42,
+      "name": "Property Soup",
+      "description": null,
+      "instructions": null,
+      "servings": 2,
+      "servings_text": "Makes one pot",
+      "working_time": 10,
+      "waiting_time": 20,
+      "created_at": "2026-10-11T12:07:46Z",
+      "updated_at": "2026-10-11T12:07:47Z",
+      "internal": true,
+      "source_url": "https://example.com/soup",
+      "show_ingredient_overview": true,
+      "steps": [],
+      "keywords": [],
+      "nutrition": {
+        "id": 9,
+        "calories": 250,
+        "carbohydrates": 31.5,
+        "fats": 8,
+        "proteins": 12,
+        "source": "Package labels"
+      },
+      "properties": [{
+        "id": 4,
+        "property_amount": null,
+        "property_type": {
+          "id": 7,
+          "name": "Fiber",
+          "unit": "g",
+          "description": "Dietary fiber",
+          "order": 1,
+          "fdc_id": null
+        }
+      }]
+    }"#;
+
+    let recipe: Recipe = serde_json::from_str(json).expect("recipe detail");
+    let nutrition = recipe.nutrition.expect("nutrition");
+    assert_eq!(nutrition.carbohydrates, Some(31.5));
+    assert_eq!(nutrition.source.as_deref(), Some("Package labels"));
+    assert_eq!(recipe.properties[0].property_amount, None);
+    assert_eq!(recipe.properties[0].property_type.name, "Fiber");
+}
+
 /// Production recipe 1647 ("Brownie GF") had a video attached to a step. Tandoor
 /// serializes `step.file` as a nested `UserFile` object, which broke
 /// `get_recipe_details` while the field was typed as a string.

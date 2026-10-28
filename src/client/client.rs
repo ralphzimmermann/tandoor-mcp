@@ -1491,6 +1491,13 @@ impl TandoorClient {
         self.get_all_paginated(url, "keywords").await
     }
 
+    /// Return every recipe property type available in the current Tandoor space.
+    pub async fn list_property_types(&self) -> Result<PaginatedResponse<PropertyType>> {
+        let url = format!("{}/api/property-type/?page_size=100", self.base_url);
+        tracing::debug!("Getting all recipe property types from Tandoor: {}", url);
+        self.get_all_paginated(url, "property types").await
+    }
+
     pub async fn get_units(&self) -> Result<PaginatedResponse<Unit>> {
         let auth_header = self.get_auth_header()?;
         let url = format!("{}/api/unit/", self.base_url);

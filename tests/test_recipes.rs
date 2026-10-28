@@ -63,8 +63,20 @@ async fn test_create_and_retrieve_recipe() {
         internal: true,
         description: Some("A test recipe created by integration tests".to_string()),
         servings: Some(4),
+        servings_text: Some("Makes four portions".to_string()),
         working_time: 30,
         waiting_time: 15,
+        source_url: Some("https://example.com/test-recipe".to_string()),
+        show_ingredient_overview: Some(true),
+        nutrition: Some(mcp_tandoor::client::types::NutritionRequest {
+            id: None,
+            calories: 400.0,
+            carbohydrates: 50.0,
+            fats: 10.0,
+            proteins: 20.0,
+            source: Some("Integration test".to_string()),
+        }),
+        properties: None,
         keywords: vec![mcp_tandoor::client::types::CreateKeywordRequest {
             name: "test".to_string(),
         }],
@@ -105,6 +117,47 @@ async fn test_create_and_retrieve_recipe() {
     );
     assert_eq!(retrieved_recipe.name, test_name, "Recipe name should match");
     assert_eq!(retrieved_recipe.steps.len(), 2, "Should have 2 steps");
+    assert_eq!(
+        retrieved_recipe.servings_text.as_deref(),
+        Some("Makes four portions")
+    );
+    assert_eq!(
+        retrieved_recipe.source_url.as_deref(),
+        Some("https://example.com/test-recipe")
+    );
+    let nutrition = retrieved_recipe.nutrition.expect("nutrition should exist");
+    assert_eq!(nutrition.carbohydrates, Some(50.0));
+    assert_eq!(nutrition.source.as_deref(), Some("Integration test"));
+
+    let updated = env
+        .client
+        .update_recipe(
+            created_recipe.id,
+            serde_json::json!({
+                "servings_text": "Makes eight portions",
+                "nutrition": {
+                    "id": nutrition.id,
+                    "calories": 420,
+                    "carbohydrates": 55,
+                    "fats": 11,
+                    "proteins": 21,
+                    "source": "Updated integration test"
+                }
+            }),
+        )
+        .await
+        .expect("recipe update should succeed");
+    assert_eq!(
+        updated.servings_text.as_deref(),
+        Some("Makes eight portions")
+    );
+    assert_eq!(
+        updated
+            .nutrition
+            .as_ref()
+            .and_then(|value| value.source.as_deref()),
+        Some("Updated integration test")
+    );
 }
 
 #[tokio::test]
