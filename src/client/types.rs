@@ -528,6 +528,9 @@ pub struct ShoppingFood {
     pub substitute_onhand: bool,
     #[serde(default)]
     pub supermarket_category: Option<serde_json::Value>,
+    /// Markdown sourcing notes (read only on shopping endpoints; edit via the Food API).
+    #[serde(default)]
+    pub sourcing_info: Option<String>,
     /// Server-rendered and sanitized sourcing information from shopping endpoints.
     #[serde(default)]
     pub sourcing_info_markdown: Option<String>,

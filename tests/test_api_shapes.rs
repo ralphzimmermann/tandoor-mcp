@@ -150,6 +150,7 @@ fn shopping_list_accepts_created_at_and_slim_food() {
         "name": "Onion",
         "plural_name": "Onion",
         "supermarket_category": null,
+        "sourcing_info": "Available at the farmers market.",
         "sourcing_info_markdown": "<p>Available at the farmers market.</p>"
       },
       "unit": {"id": 45, "name": "tsp", "plural_name": "tsp", "description": null, "base_unit": null},
@@ -165,6 +166,10 @@ fn shopping_list_accepts_created_at_and_slim_food() {
     let parsed: ShoppingListEntry = serde_json::from_str(json).expect("shopping entry");
     assert_eq!(parsed.food.name, "Onion");
     assert!(!parsed.food.food_onhand);
+    assert_eq!(
+        parsed.food.sourcing_info.as_deref(),
+        Some("Available at the farmers market.")
+    );
     assert_eq!(
         parsed.food.sourcing_info_markdown.as_deref(),
         Some("<p>Available at the farmers market.</p>")

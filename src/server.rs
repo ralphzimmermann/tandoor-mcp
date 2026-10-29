@@ -1102,17 +1102,37 @@ fn category_view(v: &serde_json::Value) -> serde_json::Value {
 /// `sourcing_info` is the editable Markdown source. The rendered companion is
 /// produced and sanitized by Tandoor and must never be sent back on writes.
 fn food_view(food: &crate::client::types::Food) -> serde_json::Value {
+    let mut view = food_summary_view(food);
+    view["sourcing_info_markdown"] = json!(food.sourcing_info_markdown);
+    view
+}
+
+/// Food shape for list results such as `search_foods`.
+///
+/// Omits the rendered HTML: for an LLM consumer it duplicates the Markdown and
+/// would double the token cost of every hit that carries sourcing notes.
+fn food_summary_view(food: &crate::client::types::Food) -> serde_json::Value {
     json!({
         "id": food.id,
         "name": food.name,
         "plural_name": food.plural_name,
         "description": food.description,
         "sourcing_info": food.sourcing_info,
-        "sourcing_info_markdown": food.sourcing_info_markdown,
         "food_onhand": food.food_onhand,
         "supermarket_category": food.supermarket_category
     })
 }
+
+/// Detect a Tandoor instance that predates Food sourcing information.
+///
+/// Django REST Framework silently drops unknown fields on writes, so a request
+/// that sent `sourcing_info` succeeds with HTTP 200 while storing nothing. The
+/// only signal is that the response omits the field entirely.
+fn sourcing_info_unsupported(requested: bool, food: &crate::client::types::Food) -> bool {
+    requested && food.sourcing_info.is_none()
+}
+
+const SOURCING_UNSUPPORTED_MSG: &str = "the connected Tandoor instance does not support Food sourcing information (field ignored by the server); upgrade Tandoor to a release that includes it";
 
 /// A supermarket with its aisles (categories) in walking order.
 fn supermarket_view(v: &serde_json::Value) -> serde_json::Value {
@@ -3722,7 +3742,7 @@ impl TandoorMcpServer {
                 let items: Vec<serde_json::Value> = entries
                     .into_iter()
                     .map(|entry| {
-                        json!({
+                        let mut item = json!({
                             "id": entry.id,
                             "food": entry.food.name,
                             "amount": entry.amount,
@@ -3733,7 +3753,13 @@ impl TandoorMcpServer {
                             "lists": entry.shopping_lists.iter().map(|l| &l.name).collect::<Vec<_>>(),
                             "created": entry.created,
                             "completed": entry.completed
-                        })
+                        });
+                        // Purchasing guidance is only attached when the Food has notes, keeping
+                        // the common case compact. Markdown source, not the rendered HTML.
+                        if let Some(info) = entry.food.sourcing_info.as_deref().filter(|s| !s.trim().is_empty()) {
+                            item["sourcing_info"] = json!(info);
+                        }
+                        item
                     })
                     .collect();
 
@@ -3814,7 +3840,7 @@ impl TandoorMcpServer {
                 let foods_json: Vec<serde_json::Value> = response
                     .results
                     .into_iter()
-                    .map(|food| food_view(&food))
+                    .map(|food| food_summary_view(&food))
                     .collect();
 
                 let result = json!({
@@ -3884,6 +3910,7 @@ impl TandoorMcpServer {
             Ok(client) => client,
             Err(e) => return tool_err("Authentication Error", e),
         };
+        let sourcing_requested = params.sourcing_info.is_some();
         let request = crate::client::types::NewFoodRequest {
             name: name.to_string(),
             plural_name: params.plural_name,
@@ -3894,6 +3921,15 @@ impl TandoorMcpServer {
         };
 
         match client.create_food(request).await {
+            // The Food exists either way; surface a warning rather than an error so the
+            // caller does not retry and create a duplicate.
+            Ok(food) if sourcing_info_unsupported(sourcing_requested, &food) => {
+                let mut view = food_view(&food);
+                view["warning"] = json!(format!(
+                    "sourcing_info was not stored: {SOURCING_UNSUPPORTED_MSG}"
+                ));
+                tool_ok(view)
+            }
             Ok(food) => tool_ok(food_view(&food)),
             Err(e) => tool_err("Failed to create food", e),
         }
@@ -3924,6 +3960,7 @@ impl TandoorMcpServer {
             Ok(client) => client,
             Err(e) => return tool_err("Authentication Error", e),
         };
+        let sourcing_requested = params.sourcing_info.is_some();
         let request = crate::client::types::UpdateFoodRequest {
             name: params.name,
             plural_name: params.plural_name,
@@ -3933,6 +3970,12 @@ impl TandoorMcpServer {
         };
 
         match client.update_food(params.food_id, request).await {
+            Ok(food) if sourcing_info_unsupported(sourcing_requested, &food) => tool_err(
+                "Sourcing information not stored",
+                format!(
+                    "{SOURCING_UNSUPPORTED_MSG}; any other fields in this request were applied"
+                ),
+            ),
             Ok(food) => tool_ok(food_view(&food)),
             Err(e) => tool_err("Failed to update food", e),
         }
@@ -8783,6 +8826,22 @@ mod tests {
             view["sourcing_info_markdown"],
             "<p>Buy <strong>fermented</strong> products.</p>"
         );
+
+        // Search results keep the Markdown but drop the redundant HTML.
+        let summary = food_summary_view(&food);
+        assert_eq!(summary["sourcing_info"], "Buy **fermented** products.");
+        assert!(summary.get("sourcing_info_markdown").is_none());
+    }
+
+    #[test]
+    fn sourcing_info_unsupported_only_when_requested_and_missing_from_response() {
+        let legacy: crate::client::types::Food =
+            serde_json::from_value(json!({"id": 1, "name": "Onion"})).unwrap();
+        let current: crate::client::types::Food =
+            serde_json::from_value(json!({"id": 1, "name": "Onion", "sourcing_info": ""})).unwrap();
+        assert!(sourcing_info_unsupported(true, &legacy));
+        assert!(!sourcing_info_unsupported(false, &legacy));
+        assert!(!sourcing_info_unsupported(true, &current));
     }
 
     #[test]
