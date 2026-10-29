@@ -55,10 +55,19 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
   compatible service. See [S3 thumbnails and inline gallery](thumbnails.md).
 - `THUMBNAIL_URL_TTL_SECS`: presigned thumbnail lifetime; default 86400.
 - `THUMBNAIL_MAX_EDGE`: generated JPEG longest edge; default 512.
+- `NEW_RELIC_LICENSE_KEY`: enables OpenTelemetry trace export to New Relic
+  when non-empty. Blank or absent means no exporter or telemetry traffic.
+- `NEW_RELIC_APP_NAME`: trace service name; default `tandoor-mcp`.
+- `NEW_RELIC_OTLP_ENDPOINT`: OTLP/HTTP base endpoint; defaults to New Relic's
+  US endpoint. EU accounts should use `https://otlp.eu01.nr-data.net:4318`.
+- `NEW_RELIC_ENVIRONMENT_NAME`: optional `deployment.environment.name`
+  attribute (for example `production`). Omitted when blank.
 - `RUST_LOG`: tracing filter; default `info`. At `info` every `tools/call`
   logs one line on entry (tool name and argument keys, never values) and one on
   exit (ok / tool error / rejected), so a ChatGPT call that fails before it
   reaches Tandoor is still visible in `docker logs`.
+
+See [New Relic tracing](telemetry.md) for trace contents and propagation.
 
 Keep the local default bind unless a reverse proxy or container network needs a
 different address. A public deployment must terminate HTTPS before this

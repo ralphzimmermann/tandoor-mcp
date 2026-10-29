@@ -16,24 +16,29 @@
 //! - `S3_BUCKET`: Private bucket used for generated thumbnails (unset disables galleries)
 //! - `S3_REGION`, `S3_ENDPOINT`: S3 region and optional S3-compatible endpoint
 //! - `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: Least-privilege thumbnail credentials
+//! - `NEW_RELIC_LICENSE_KEY`: Enables New Relic tracing when non-empty
+//! - `NEW_RELIC_APP_NAME`, `NEW_RELIC_OTLP_ENDPOINT`: Trace service and destination
+//! - `NEW_RELIC_ENVIRONMENT_NAME`: Optional `deployment.environment.name` (e.g. `production`)
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
 
 use mcp_tandoor::{
-    config::ThumbnailConfig, mcp_router, server::TandoorMcpServer, storage::S3ThumbnailStore,
+    config::ThumbnailConfig,
+    mcp_router,
+    server::TandoorMcpServer,
+    storage::S3ThumbnailStore,
+    telemetry::{self, TelemetryConfig},
     thumbnail_service::ThumbnailService,
 };
 use std::{env, net::SocketAddr, sync::Arc};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".to_string().into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let tracer_provider = telemetry::init(TelemetryConfig::from_env())?;
+    if tracer_provider.is_some() {
+        tracing::info!("New Relic tracing enabled");
+    } else {
+        tracing::info!("New Relic tracing disabled");
+    }
 
     let base_url =
         env::var("TANDOOR_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
@@ -134,6 +139,10 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
+    if let Some(provider) = tracer_provider {
+        telemetry::shutdown(provider).await;
+    }
+
     Ok(())
 }
 
@@ -143,9 +152,37 @@ fn non_empty_secret(value: Option<String>) -> Option<String> {
         .filter(|secret| !secret.is_empty())
 }
 
+/// Resolve on SIGINT (Ctrl-C) or SIGTERM.
+///
+/// The binary is PID 1 in its container with no init process, so Docker's
+/// SIGTERM must be handled here or `docker stop` waits for the kill timeout
+/// and buffered telemetry is never flushed.
 async fn shutdown_signal() {
-    if let Err(error) = tokio::signal::ctrl_c().await {
-        tracing::error!("Failed to listen for shutdown signal: {error}");
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::error!("Failed to listen for SIGINT: {error}");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut stream) => {
+                stream.recv().await;
+            }
+            Err(error) => {
+                tracing::error!("Failed to listen for SIGTERM: {error}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
     }
     tracing::info!("Shutting down...");
 }

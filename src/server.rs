@@ -32,6 +32,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
+use tracing::Instrument;
 
 use crate::domain::shopping::{
     name_matches, parse_shopping_text, resolve_unit_name, ParsedShoppingItem,
@@ -7749,13 +7750,30 @@ impl ServerHandler for TandoorMcpServer {
             .unwrap_or_default();
         tracing::info!(%tool, ?arg_keys, "tools/call");
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        let result = self.tool_router.call(tcc).await;
+        let span = tracing::info_span!(
+            "mcp.tool_call",
+            otel.name = format!("tools/call {tool}").as_str(),
+            otel.kind = "server",
+            otel.status_code = tracing::field::Empty,
+            otel.status_message = tracing::field::Empty,
+            mcp.tool = %tool,
+        );
+        let result = self.tool_router.call(tcc).instrument(span.clone()).await;
         match &result {
-            Err(error) => tracing::warn!(%tool, %error, "tools/call rejected"),
+            Err(error) => {
+                span.record("otel.status_code", "ERROR");
+                span.record("otel.status_message", error.to_string());
+                tracing::warn!(%tool, %error, "tools/call rejected");
+            }
             Ok(CallToolResponse::Complete(result)) if result.is_error == Some(true) => {
+                span.record("otel.status_code", "ERROR");
+                span.record("otel.status_message", "tool returned an error response");
                 tracing::warn!(%tool, "tools/call returned a tool error")
             }
-            Ok(_) => tracing::info!(%tool, "tools/call ok"),
+            Ok(_) => {
+                span.record("otel.status_code", "OK");
+                tracing::info!(%tool, "tools/call ok");
+            }
         }
         result
     }

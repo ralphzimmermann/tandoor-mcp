@@ -7,6 +7,8 @@ edition = "2021"
 rmcp = { version = "3.6", features = ["server", "transport-streamable-http-server", "macros"] }
 axum = "0.8"
 reqwest = { version = "0.13", features = ["json", "multipart"] }
+reqwest-middleware = { version = "0.5.2", features = ["json", "multipart", "query"] }
+reqwest-tracing = { version = "0.7.1", features = ["opentelemetry_0_32"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.46", features = ["full"] }
@@ -16,6 +18,10 @@ base64 = "0.22"
 urlencoding = "2.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+tracing-opentelemetry = "0.33"
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls"] }
 async-trait = "0.1.89"
 aws-config = { version = "=1.8.13", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3 = { version = "=1.122.0", default-features = false, features = ["default-https-client", "rt-tokio"] }

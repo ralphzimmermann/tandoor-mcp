@@ -31,6 +31,11 @@ services:
       THUMBNAIL_URL_TTL_SECS: ${THUMBNAIL_URL_TTL_SECS:-86400}
       THUMBNAIL_MAX_EDGE: ${THUMBNAIL_MAX_EDGE:-512}
       RUST_LOG: ${RUST_LOG:-info}
+      # Blank disables the exporter and retains formatted Docker logs only.
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME:-tandoor-mcp}
+      NEW_RELIC_OTLP_ENDPOINT: ${NEW_RELIC_OTLP_ENDPOINT:-https://otlp.nr-data.net:4318}
+      NEW_RELIC_ENVIRONMENT_NAME: ${NEW_RELIC_ENVIRONMENT_NAME:-}
     expose:
       - "3001"
     networks:
