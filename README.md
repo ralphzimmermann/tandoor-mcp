@@ -242,6 +242,24 @@ the scope: a step embed is local to one parent recipe, while a Food link is
 global. `get_recipe_details` returns the stable step, ingredient, and food IDs
 required for these tools. See [Recipe relations through MCP](docs/mcp.md).
 
+### Food Management and Sourcing
+
+- `search_foods` — Search reusable Foods and return their descriptions, pantry/category state, and raw Markdown `sourcing_info`
+- `get_food` — Retrieve one Food by ID, including both `sourcing_info` and the sanitized `sourcing_info_markdown`
+- `create_food` — Create a Food with optional plural name, description, pantry state, and Markdown sourcing information
+- `update_food` — Partially update those fields; pass `sourcing_info: ""` to clear the sourcing notes
+- `get_shopping_list` items carry `sourcing_info` (Markdown) when the Food has notes, so purchasing advice is available while shopping
+
+`sourcing_info` is the editable source of truth. `sourcing_info_markdown` is
+rendered and sanitized by Tandoor and is never accepted on writes; search and
+shopping results omit it because it duplicates the Markdown. These fields
+require a Tandoor release that includes Food sourcing information. Older
+instances remain readable but return neither field, and because Django REST
+Framework silently ignores unknown fields, a sourcing write would otherwise
+succeed without storing anything. The MCP detects this from the response:
+`update_food` returns an error and `create_food` returns the new Food with a
+`warning`.
+
 ### Recipe Books
 
 - `get_recipe_books` — List all recipe books/collections, optionally filtered by name

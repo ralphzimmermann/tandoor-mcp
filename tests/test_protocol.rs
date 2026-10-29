@@ -239,6 +239,9 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
         "delete_supermarket_category",
         "set_food_category",
         "search_foods",
+        "get_food",
+        "create_food",
+        "update_food",
         "update_pantry",
         "find_duplicate_foods",
         "merge_foods",
@@ -282,6 +285,9 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     assert_eq!(annotation("search_recipes")["readOnlyHint"], true);
     assert_eq!(annotation("create_recipe")["destructiveHint"], false);
     assert_eq!(annotation("delete_meal_plan")["destructiveHint"], true);
+    assert_eq!(annotation("get_food")["readOnlyHint"], true);
+    assert_eq!(annotation("create_food")["destructiveHint"], false);
+    assert_eq!(annotation("update_food")["idempotentHint"], true);
     assert_eq!(annotation("update_pantry")["idempotentHint"], true);
     assert_eq!(annotation("merge_foods")["destructiveHint"], true);
     assert_eq!(annotation("get_recipe_books")["readOnlyHint"], true);
@@ -293,6 +299,19 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     assert_eq!(annotation("link_food_recipe")["destructiveHint"], false);
     assert_eq!(annotation("unlink_food_recipe")["destructiveHint"], true);
     assert_eq!(annotation("add_ingredient_header")["idempotentHint"], false);
+
+    let tool = |name: &str| {
+        first_tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"))
+    };
+    assert!(tool("create_food")["inputSchema"]["properties"]["sourcing_info"].is_object());
+    assert!(tool("update_food")["inputSchema"]["properties"]["sourcing_info"].is_object());
+    assert!(tool("create_food")["inputSchema"]["properties"]
+        .get("sourcing_info_markdown")
+        .is_none());
+
     let gallery = first_tools
         .iter()
         .find(|tool| tool["name"] == "get_recipe_gallery")
