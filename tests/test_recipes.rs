@@ -160,6 +160,106 @@ async fn test_create_and_retrieve_recipe() {
     );
 }
 
+/// Recipe properties round-trip through Tandoor's nested serializer with the
+/// exact payload shape `update_recipe` builds: the full list, existing rows
+/// keyed by `id`, and types referenced as `{id, name}`. Properties absent
+/// from the list are deleted by Tandoor, which is what removal relies on.
+#[tokio::test]
+#[serial]
+async fn test_recipe_properties_upsert_and_remove() {
+    use mcp_tandoor::client::types::{CreateRecipeRequest, PropertyRequest, PropertyTypeReference};
+
+    common::init_test_logging();
+    DockerEnvironment::ensure_running().expect("Docker environment not running");
+    let env = TestEnvironment::new()
+        .await
+        .expect("Failed to create test environment");
+
+    let stamp = chrono::Utc::now().timestamp();
+    let fiber = env
+        .client
+        .create_property_type(&format!("Fiber {stamp}"), Some("g"))
+        .await
+        .expect("property type creation should succeed");
+    let cost = env
+        .client
+        .create_property_type(&format!("Cost {stamp}"), Some("EUR"))
+        .await
+        .expect("property type creation should succeed");
+
+    let listed = env
+        .client
+        .list_property_types()
+        .await
+        .expect("property types should list");
+    assert!(listed.results.iter().any(|t| t.id == fiber.id));
+    assert!(listed.results.iter().any(|t| t.id == cost.id));
+
+    let reference =
+        |property_type: &mcp_tandoor::client::types::PropertyType| PropertyTypeReference {
+            id: property_type.id,
+            name: property_type.name.clone(),
+        };
+    let created = env
+        .client
+        .create_recipe(CreateRecipeRequest {
+            name: format!("Property Recipe {stamp}"),
+            internal: true,
+            description: None,
+            servings: Some(2),
+            servings_text: None,
+            working_time: 0,
+            waiting_time: 0,
+            source_url: None,
+            show_ingredient_overview: None,
+            nutrition: None,
+            properties: Some(vec![
+                PropertyRequest {
+                    id: None,
+                    property_amount: Some(4.5),
+                    property_type: reference(&fiber),
+                },
+                PropertyRequest {
+                    id: None,
+                    property_amount: None,
+                    property_type: reference(&cost),
+                },
+            ]),
+            keywords: vec![],
+            steps: vec![],
+        })
+        .await
+        .expect("recipe creation should succeed");
+    assert_eq!(created.properties.len(), 2);
+    let stored_fiber = created
+        .properties
+        .iter()
+        .find(|p| p.property_type.id == fiber.id)
+        .expect("fiber property stored");
+    assert_eq!(stored_fiber.property_amount, Some(4.5));
+    let fiber_row_id = stored_fiber.id;
+
+    // Upsert fiber (keeping its row) and drop cost by omitting it.
+    let updated = env
+        .client
+        .update_recipe(
+            created.id,
+            serde_json::json!({
+                "properties": [PropertyRequest {
+                    id: fiber_row_id,
+                    property_amount: Some(9.0),
+                    property_type: reference(&fiber),
+                }]
+            }),
+        )
+        .await
+        .expect("recipe update should succeed");
+    assert_eq!(updated.properties.len(), 1);
+    assert_eq!(updated.properties[0].property_type.id, fiber.id);
+    assert_eq!(updated.properties[0].id, fiber_row_id);
+    assert_eq!(updated.properties[0].property_amount, Some(9.0));
+}
+
 #[tokio::test]
 #[serial]
 async fn test_get_recipe_not_found() {

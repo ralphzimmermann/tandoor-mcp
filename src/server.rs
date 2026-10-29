@@ -128,29 +128,41 @@ pub struct CreateRecipeParams {
     pub prep_time: Option<i32>,
     #[serde(default)]
     pub cook_time: Option<i32>,
+    /// Web page the recipe came from, if any.
     #[serde(default)]
     pub source_url: Option<String>,
+    /// Show the combined ingredient list above the steps in Tandoor's recipe view.
     #[serde(default)]
     pub show_ingredient_overview: Option<bool>,
+    /// Nutrition for the whole recipe at `servings`. Values you omit are stored as 0,
+    /// not as unknown; omit `nutrition` entirely if you have no data.
     #[serde(default)]
     pub nutrition: Option<NutritionInput>,
-    /// Recipe-level properties. Call get_property_types before setting these.
+    /// Recipe-level properties (amount per serving). Call get_property_types before setting these.
     #[serde(default)]
     pub properties: Option<Vec<RecipePropertyInput>>,
     #[serde(default)]
     pub keywords: Option<Vec<String>>,
 }
 
+/// Nutrition values for the whole recipe at its stored `servings`, matching how
+/// Tandoor stores them. Tandoor requires every numeric field, so a value that is
+/// omitted on create is stored as 0; on update it keeps its current value.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct NutritionInput {
+    /// Energy in kcal for the whole recipe.
     #[serde(default)]
     pub calories: Option<f64>,
+    /// Carbohydrates in grams for the whole recipe.
     #[serde(default)]
     pub carbohydrates: Option<f64>,
+    /// Fat in grams for the whole recipe.
     #[serde(default)]
     pub fats: Option<f64>,
+    /// Protein in grams for the whole recipe.
     #[serde(default)]
     pub proteins: Option<f64>,
+    /// Free text naming where the values came from, for example "package label".
     #[serde(default)]
     pub source: Option<String>,
 }
@@ -159,7 +171,7 @@ pub struct NutritionInput {
 pub struct RecipePropertyInput {
     /// Existing property type name or ID from get_property_types.
     pub property_type: NameOrId,
-    /// Property amount; omit to store an unspecified amount.
+    /// Amount per serving in the property type's unit; omit to store an unspecified amount.
     #[serde(default)]
     pub amount: Option<f64>,
 }
@@ -1003,6 +1015,15 @@ pub enum NameOrId {
     Name(String),
 }
 
+impl std::fmt::Display for NameOrId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NameOrId::Id(id) => write!(f, "ID {id}"),
+            NameOrId::Name(name) => write!(f, "\"{name}\""),
+        }
+    }
+}
+
 /// Finds the object a NameOrId points to among `items` (JSON objects with "id" and
 /// "name"): exact ID, else exact case-insensitive name, else a partial name match only
 /// when it is unambiguous.
@@ -1338,19 +1359,44 @@ fn property_type_for_input<'a>(
     })
 }
 
+/// Plan the full `properties` list Tandoor must receive for a recipe write.
+///
+/// Tandoor's nested serializer deletes any existing property that is absent
+/// from the submitted list, so the result always carries every property that
+/// should remain: current ones minus `remove`, then `set` upserted by type.
+/// Removals are resolved against the recipe's current properties and an
+/// unknown entry is an error, mirroring how `set` rejects unknown types.
 fn plan_property_changes(
     current: &[crate::client::types::Property],
     set: &[RecipePropertyInput],
-    remove: &[String],
+    remove: &[NameOrId],
     types: &[crate::client::types::PropertyType],
 ) -> Result<Vec<crate::client::types::PropertyRequest>, String> {
-    let removed = remove
+    let current_types = current
         .iter()
-        .map(|name| name.trim().to_lowercase())
-        .collect::<std::collections::HashSet<_>>();
+        .map(|property| property.property_type.clone())
+        .collect::<Vec<_>>();
+    let mut removed = std::collections::HashSet::new();
+    for target in remove {
+        match property_type_for_input(target, &current_types) {
+            Ok(property_type) => {
+                removed.insert(property_type.id);
+            }
+            Err(_) => {
+                let present = current_types
+                    .iter()
+                    .map(|value| value.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "Cannot remove property {target}: the recipe has no property of that type. Current properties: {present}"
+                ));
+            }
+        }
+    }
     let mut result = current
         .iter()
-        .filter(|property| !removed.contains(&property.property_type.name.trim().to_lowercase()))
+        .filter(|property| !removed.contains(&property.property_type.id))
         .map(|property| crate::client::types::PropertyRequest {
             id: property.id,
             property_amount: property.property_amount,
@@ -1418,6 +1464,74 @@ fn recipe_scalar_body(params: &UpdateRecipeParams) -> serde_json::Map<String, se
     body
 }
 
+/// Nutrition for the whole recipe, multiplied by `factor` when the caller
+/// scaled the recipe. Tandoor stores these values for the recipe at its base
+/// servings (its legacy nutrition card multiplies by the ingredient factor), so
+/// scaling them alongside the ingredients keeps the output self-consistent.
+/// The internal row id is omitted: writes address nutrition as a whole.
+fn nutrition_view(
+    nutrition: Option<&crate::client::types::Nutrition>,
+    factor: f64,
+) -> serde_json::Value {
+    let scaled = |value: Option<f64>| value.map(|amount| amount * factor);
+    match nutrition {
+        Some(nutrition) => json!({
+            "calories": scaled(nutrition.calories),
+            "carbohydrates": scaled(nutrition.carbohydrates),
+            "fats": scaled(nutrition.fats),
+            "proteins": scaled(nutrition.proteins),
+            "source": nutrition.source,
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// Explicit recipe properties. Tandoor defines `property_amount` per serving,
+/// so it is independent of scaling and labelled as such. Row ids are omitted
+/// because writes address properties by type.
+fn properties_view(properties: &[crate::client::types::Property]) -> serde_json::Value {
+    json!(properties
+        .iter()
+        .map(|property| json!({
+            "type_id": property.property_type.id,
+            "type": property.property_type.name,
+            "unit": property.property_type.unit,
+            "amount_per_serving": property.property_amount
+        }))
+        .collect::<Vec<_>>())
+}
+
+/// Summarise Tandoor's computed `food_properties` blob.
+///
+/// Tandoor returns a map keyed by property-type id whose entries also carry a
+/// per-ingredient `food_values` breakdown. Only the totals are useful to the
+/// model, so each entry collapses to its type, the whole-recipe `total`
+/// (scaled by `factor`), and whether any ingredient lacked a value. Unexpected
+/// shapes are passed through untouched rather than dropped.
+fn food_properties_view(value: Option<&serde_json::Value>, factor: f64) -> serde_json::Value {
+    let Some(value) = value else {
+        return serde_json::Value::Null;
+    };
+    let Some(entries) = value.as_object() else {
+        return value.clone();
+    };
+    let mut summary = entries
+        .values()
+        .filter_map(|entry| {
+            let entry = entry.as_object()?;
+            Some(json!({
+                "type_id": entry.get("id"),
+                "type": entry.get("name"),
+                "unit": entry.get("unit"),
+                "total": entry.get("total_value").and_then(|v| v.as_f64()).map(|v| v * factor),
+                "missing_value": entry.get("missing_value").and_then(|v| v.as_bool()).unwrap_or(false)
+            }))
+        })
+        .collect::<Vec<_>>();
+    summary.sort_by_key(|entry| entry["type_id"].as_i64());
+    json!(summary)
+}
+
 fn recipe_fields_view(
     recipe: &crate::client::types::Recipe,
     client: &TandoorClient,
@@ -1454,20 +1568,13 @@ fn recipe_fields_view(
         "keywords".to_string(),
         json!(keyword_names(&recipe.keywords)),
     );
-    result.insert("nutrition".to_string(), json!(recipe.nutrition));
+    result.insert(
+        "nutrition".to_string(),
+        nutrition_view(recipe.nutrition.as_ref(), 1.0),
+    );
     result.insert(
         "properties".to_string(),
-        json!(recipe
-            .properties
-            .iter()
-            .map(|property| json!({
-                "id": property.id,
-                "type_id": property.property_type.id,
-                "type": property.property_type.name,
-                "unit": property.property_type.unit,
-                "amount": property.property_amount
-            }))
-            .collect::<Vec<_>>()),
+        properties_view(&recipe.properties),
     );
     result.insert("rating".to_string(), json!(recipe.rating));
     result.insert("last_cooked".to_string(), json!(recipe.last_cooked));
@@ -1948,22 +2055,27 @@ pub struct UpdateRecipeParams {
     pub cooking_time: Option<i64>,
     #[serde(default)]
     pub waiting_time: Option<i64>,
+    /// Web page the recipe came from, if any.
     #[serde(default)]
     pub source_url: Option<String>,
+    /// Show the combined ingredient list above the steps in Tandoor's recipe view.
     #[serde(default)]
     pub show_ingredient_overview: Option<bool>,
-    /// Partial nutrition update; omitted values retain their current values.
+    /// Partial nutrition update for the whole recipe; omitted values keep their current
+    /// values (or 0 if the recipe had no nutrition yet).
     #[serde(default)]
     pub nutrition: Option<NutritionInput>,
     /// Remove the complete nutrition record.
     #[serde(default)]
     pub remove_nutrition: Option<bool>,
-    /// Add or replace properties by property type. Call get_property_types first.
+    /// Add or replace properties by property type (amount per serving). Call
+    /// get_property_types first.
     #[serde(default)]
     pub set_properties: Option<Vec<RecipePropertyInput>>,
-    /// Property type names to remove (case-insensitive).
+    /// Property types to remove from this recipe, by name (case-insensitive) or ID.
+    /// Fails if the recipe has no property of that type.
     #[serde(default)]
-    pub remove_properties: Option<Vec<String>>,
+    pub remove_properties: Option<Vec<NameOrId>>,
     /// Edit specific existing steps (instruction, name, time, and that step's ingredients).
     /// Steps not listed are left untouched. Preferred way to change steps.
     #[serde(default)]
@@ -3035,6 +3147,10 @@ impl TandoorMcpServer {
                     _ => "No photo is stored for this recipe; do not substitute an unrelated, web-searched, or stock image.",
                 };
 
+                // Ingredient amounts, nutrition, and computed food-property totals
+                // describe the whole recipe and scale together; `properties` are per
+                // serving in Tandoor and therefore do not. `base_servings` keeps the
+                // stored value visible when `servings` reflects the request.
                 let mut result = recipe_fields_view(&recipe, &client);
                 result.insert("steps".to_string(), json!(steps));
                 result.insert("ingredients".to_string(), json!(ingredients));
@@ -3042,12 +3158,24 @@ impl TandoorMcpServer {
                     "servings".to_string(),
                     json!(params.servings.unwrap_or(recipe.servings.unwrap_or(1))),
                 );
+                result.insert("base_servings".to_string(), json!(recipe.servings));
+                result.insert(
+                    "nutrition".to_string(),
+                    nutrition_view(recipe.nutrition.as_ref(), scaling_factor),
+                );
+                result.insert(
+                    "food_properties".to_string(),
+                    food_properties_view(recipe.food_properties.as_ref(), scaling_factor),
+                );
                 result.insert("image".to_string(), json!(recipe.image));
                 result.insert("requested_image_variant".to_string(), json!(params.image));
                 result.insert("image_status".to_string(), json!(image_status));
                 result.insert("image_instruction".to_string(), json!(image_instruction));
-                result.insert("food_properties".to_string(), json!(recipe.food_properties));
                 result.insert("scaling_applied".to_string(), json!(scaling_factor != 1.0));
+                result.insert(
+                    "scaling_note".to_string(),
+                    json!("ingredients, nutrition, and food_properties totals are for the whole recipe at `servings`; properties[].amount_per_serving is per serving and never scaled"),
+                );
 
                 let mut content = vec![Content::text(
                     serde_json::to_string_pretty(&serde_json::Value::Object(result)).unwrap(),
@@ -5226,7 +5354,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Update an existing recipe and mark it as internally managed. Top-level fields (name, description, servings, servings_text, cooking_time, waiting_time, source_url, show_ingredient_overview), nutrition, and properties change only when passed. Call get_property_types before setting properties. Nutrition updates are partial; remove_nutrition clears it. Properties can be upserted or removed by type. Keywords support targeted add/remove or full replacement. Steps support targeted edits, inserts, moves, removals, or full replacement. Call get_recipe_details first for step numbers.",
+        description = "Update an existing recipe and mark it as internally managed. Top-level fields (name, description, servings, servings_text, cooking_time, waiting_time, source_url, show_ingredient_overview) change only what you pass. `nutrition` is a partial update of whole-recipe values; `remove_nutrition` clears it. `set_properties` upserts and `remove_properties` removes recipe properties by type (call get_property_types first). Keywords/tags: `add_keywords` / `remove_keywords` (by name) change just those; `replace_all_keywords` is a FULL REPLACEMENT of the keyword list. To edit steps, call get_recipe_details first and refer to steps by their step_number: `step_updates` edits specific steps and their ingredients (add_ingredients, remove_ingredients, update_ingredients to change an amount/unit/note/food in place, or replace_ingredients), `add_steps` inserts new steps, `move_steps` reorders, `remove_steps` deletes; all other steps stay untouched. An ingredient entry of {\"header\": \"For the sauce\"} is a section heading. `replace_all_steps` is a FULL REPLACEMENT that deletes every existing step and ingredient — only use it to rewrite the whole recipe. Returns the resulting recipe and steps so you can verify.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -7661,10 +7789,20 @@ mod tests {
             property_type: NameOrId::Name("fiber".to_string()),
             amount: Some(3.5),
         }];
-        let planned = plan_property_changes(&current, &set, &["cost".to_string()], &types).unwrap();
+        // Removal by name is case-insensitive; removal by ID also works.
+        let planned = plan_property_changes(
+            &current,
+            &set,
+            &[NameOrId::Name("cost".to_string())],
+            &types,
+        )
+        .unwrap();
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].id, Some(10));
         assert_eq!(planned[0].property_amount, Some(3.5));
+        let by_id = plan_property_changes(&current, &[], &[NameOrId::Id(2)], &types).unwrap();
+        assert_eq!(by_id.len(), 1);
+        assert_eq!(by_id[0].property_type.id, 1);
 
         let unknown = vec![RecipePropertyInput {
             property_type: NameOrId::Name("Unknown".to_string()),
@@ -7672,6 +7810,63 @@ mod tests {
         }];
         let error = plan_property_changes(&current, &unknown, &[], &types).unwrap_err();
         assert!(error.contains("Available types: Fiber, Cost"), "{error}");
+
+        // Removing a type the recipe does not carry is an error, not a silent no-op.
+        let error = plan_property_changes(
+            &current,
+            &[],
+            &[NameOrId::Name("Sodium".to_string())],
+            &types,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot remove property \"Sodium\"")
+                && error.contains("Current properties: Fiber, Cost"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn nutrition_and_food_properties_views_scale_whole_recipe_values() {
+        let nutrition: crate::client::types::Nutrition = serde_json::from_value(json!({
+            "id": 9, "calories": 100, "carbohydrates": 20, "fats": 3, "proteins": 4, "source": "label"
+        }))
+        .unwrap();
+        let scaled = nutrition_view(Some(&nutrition), 2.0);
+        assert_eq!(scaled["calories"], 200.0);
+        assert_eq!(scaled["carbohydrates"], 40.0);
+        assert_eq!(scaled["source"], "label");
+        assert!(scaled.get("id").is_none(), "row id must not leak: {scaled}");
+        assert!(nutrition_view(None, 2.0).is_null());
+
+        // Tandoor's computed blob: keyed by type id, with a per-food breakdown.
+        let blob = json!({
+            "2": {"id": 2, "name": "Cost", "unit": "EUR", "total_value": 1.5, "missing_value": true,
+                  "food_values": {"7": {"id": 7, "value": null}}},
+            "1": {"id": 1, "name": "Fiber", "unit": "g", "total_value": 4, "missing_value": false,
+                  "food_values": {"7": {"id": 7, "value": 4}}}
+        });
+        let summary = food_properties_view(Some(&blob), 2.0);
+        assert_eq!(
+            summary,
+            json!([
+                {"type_id": 1, "type": "Fiber", "unit": "g", "total": 8.0, "missing_value": false},
+                {"type_id": 2, "type": "Cost", "unit": "EUR", "total": 3.0, "missing_value": true}
+            ])
+        );
+        assert!(food_properties_view(None, 1.0).is_null());
+    }
+
+    #[test]
+    fn properties_view_is_per_serving_without_row_ids() {
+        let properties: Vec<crate::client::types::Property> = serde_json::from_value(json!([
+            {"id": 10, "property_amount": 2.0, "property_type": {"id": 1, "name": "Fiber", "unit": "g"}}
+        ]))
+        .unwrap();
+        assert_eq!(
+            properties_view(&properties),
+            json!([{"type_id": 1, "type": "Fiber", "unit": "g", "amount_per_serving": 2.0}])
+        );
     }
 
     #[test]

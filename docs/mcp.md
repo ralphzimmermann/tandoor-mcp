@@ -172,20 +172,44 @@ one recipe.
 fields that ChatGPT needs to inspect and maintain: name, description, servings,
 `servings_text`, working and waiting time, `source_url`,
 `show_ingredient_overview`, keywords, steps, nutrition, and recipe-level
-properties. Nutrition uses Tandoor's actual `carbohydrates` field and also
-includes its free-text `source`.
+properties. Nutrition uses Tandoor's actual `carbohydrates` field (the client
+previously read a non-existent `carbs`, so carbohydrate values were silently
+dropped) and also includes its free-text `source`.
+
+Tandoor defines these quantities on different bases, and the tool output
+follows Tandoor rather than normalising them:
+
+- `nutrition` is for the whole recipe at its stored servings. Tandoor's model
+  requires every numeric field, so values omitted on create are stored as `0`;
+  on update, omitted values keep their current value.
+- `properties[].amount_per_serving` is per serving (Tandoor's property view
+  labels it "per serving" and multiplies by servings for totals).
+- `food_properties` is Tandoor's computed total per property type, summed from
+  ingredient foods. The tool collapses the per-ingredient breakdown to
+  `type`, `unit`, `total`, and `missing_value` (true when an ingredient lacks a
+  value, so the total is a lower bound).
+
+When `get_recipe_details` is called with `servings`, ingredient amounts,
+`nutrition`, and `food_properties[].total` are all multiplied by the same
+factor; `properties` are not. `base_servings` carries the stored value and
+`scaling_note` states the rule so the model does not have to infer it.
 
 Recipe properties refer to existing property types. Call `get_property_types`
 first, then pass a returned ID or exact case-insensitive name; recipe writes
 never create property types implicitly. Updates upsert properties by type and
-can remove selected types without replacing unrelated properties.
+can remove selected types (by name or ID) without replacing unrelated
+properties. Removing a type the recipe does not carry is an error, like
+setting an unknown type, so a misspelled removal does not succeed silently.
+Internally every write sends Tandoor the full property list because its nested
+serializer deletes anything omitted; see `plan_property_changes`.
 
 Detail and write results also expose read-only metadata: `internal`, image,
-rating, last-cooked time, creator, timestamps, computed `food_properties`, and
-step attachment metadata. `internal` remains forced to `true` for MCP writes.
-Privacy/sharing, diameter fields, storage paths, and generated image variants
-are intentionally not exposed. The former `source_title` update argument was
-removed because it is not a Tandoor recipe field.
+rating, last-cooked time, creator, timestamps, and step attachment metadata.
+Row ids of nutrition and property records are not exposed because writes
+address them as a whole or by type. `internal` remains forced to `true` for MCP
+writes. Privacy/sharing, diameter fields, storage paths, and generated image
+variants are intentionally not exposed. The former `source_title` update
+argument was removed because it is not a Tandoor recipe field.
 
 ## Tandoor API shape notes
 

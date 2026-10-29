@@ -217,7 +217,7 @@ curl -X POST http://your-tandoor/api-token-auth/ \
 ### Recipe Management
 
 - `search_recipes` — Search for recipes with flexible querying (keywords, foods, cooking time, rating, random). Each result includes a clickable `recipe_url` and shows `has_photo`; `has_photo: false` lists recipes missing a photo
-- `get_recipe_details` — Get comprehensive recipe information, including `servings_text`, `source_url`, nutrition, recipe-level properties, metadata, step display flags, and attached-file metadata. Includes an authoritative thumbnail by default; use `image: "original"` only for full resolution or `image: "none"` to omit it. Amounts scale with `servings`
+- `get_recipe_details` — Get comprehensive recipe information, including `servings_text`, `source_url`, nutrition, recipe-level properties, computed food-property totals, metadata, step display flags, and attached-file metadata. Includes an authoritative thumbnail by default; use `image: "original"` only for full resolution or `image: "none"` to omit it. Ingredient amounts, nutrition, and food-property totals scale with `servings` (`base_servings` keeps the stored value); per-serving properties do not
 - `get_recipe_gallery` — Render 1–24 authoritative recipe thumbnails in an inline MCP Apps gallery (requires the S3 thumbnail cache)
 - `get_recipe_image` — Return one authoritative thumbnail or explicitly requested original MCP image
 - `create_recipe` — Create a new, internally managed recipe, including `servings_text`, `source_url`, ingredient-overview visibility, nutrition, and recipe-level properties. Use `steps` to add structured steps, each with its own ingredients (food, unit, amount, note; omit `amount` for to-taste ingredients; `{"header": "For the sauce"}` adds a section heading) — the legacy `instructions` field creates a single step with no ingredients
@@ -374,8 +374,16 @@ Set `TANDOOR_TEST_PORT` when port 8080 is already in use:
 TANDOOR_TEST_PORT=18080 ./scripts/test.sh test
 ```
 
+The stack publishes Tandoor on the Docker *host*. When the active Docker
+context points at a remote engine (`ssh://` or `tcp://`), the script derives the
+host from that context automatically; set `TANDOOR_TEST_HOST` to override it:
+
+```bash
+TANDOOR_TEST_HOST=192.168.1.50 ./scripts/test.sh test
+```
+
 **Testing requirements**: Docker + Docker Compose installed and the selected
-Tandoor test port reachable from the host.
+Tandoor test host and port reachable from this machine.
 
 ### CI
 

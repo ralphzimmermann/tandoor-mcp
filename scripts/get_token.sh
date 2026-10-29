@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -e
 
 # Get a single auth token from Tandoor to avoid rate limiting

@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -e
 
 # Color codes for output
@@ -14,6 +15,30 @@ WAIT_TIME=30
 # A clean Tandoor image can spend several minutes applying migrations.
 MAX_RETRIES="${MAX_RETRIES:-60}"
 TANDOOR_TEST_PORT="${TANDOOR_TEST_PORT:-8080}"
+
+# The Compose stack publishes Tandoor on the *Docker host*, which is only
+# localhost when the active Docker context is local. For an ssh:// or tcp://
+# context (a remote engine), derive the host from the context so the readiness
+# probe, token fetch, and tests reach the published port. Override with
+# TANDOOR_TEST_HOST when the engine is reachable under a different name.
+detect_docker_host() {
+    local endpoint host
+    endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)
+    case "$endpoint" in
+        ssh://*|tcp://*)
+            host="${endpoint#*://}"   # strip scheme
+            host="${host##*@}"        # strip user@
+            host="${host%%/*}"        # strip any path
+            host="${host%%:*}"        # strip port
+            echo "${host:-localhost}"
+            ;;
+        *)
+            echo "localhost"
+            ;;
+    esac
+}
+TANDOOR_TEST_HOST="${TANDOOR_TEST_HOST:-$(detect_docker_host)}"
+TANDOOR_TEST_URL="http://${TANDOOR_TEST_HOST}:${TANDOOR_TEST_PORT}"
 
 # Parse command line arguments
 ACTION="${1:-test}"
@@ -99,12 +124,12 @@ start_services() {
     log_info "Starting Docker services..."
     docker compose -f "$COMPOSE_FILE" up -d
     
-    log_info "Waiting for services to be ready..."
+    log_info "Waiting for services to be ready at ${TANDOOR_TEST_URL}..."
     local retries=0
     while [ $retries -lt $MAX_RETRIES ]; do
         # Current Tandoor images do not include curl, so probe through the
         # published host port instead of executing a health check in-container.
-        if curl -sf "http://localhost:${TANDOOR_TEST_PORT}/login/" > /dev/null 2>&1; then
+        if curl -sf "${TANDOOR_TEST_URL}/login/" > /dev/null 2>&1; then
             log_success "Tandoor is ready!"
             return 0
         fi
@@ -185,7 +210,7 @@ run_tests() {
     log_info "Running integration tests..."
     
     # Set environment variables for the MCP server
-    export TANDOOR_BASE_URL="http://localhost:${TANDOOR_TEST_PORT}"
+    export TANDOOR_BASE_URL="${TANDOOR_TEST_URL}"
     export TANDOOR_USERNAME="admin"
     export TANDOOR_PASSWORD="testing1"
     
