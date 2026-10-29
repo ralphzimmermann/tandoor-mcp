@@ -11,7 +11,8 @@ use opentelemetry::{global, trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
-    trace::{Sampler, SdkTracerProvider},
+    runtime,
+    trace::{span_processor_with_async_runtime::BatchSpanProcessor, Sampler, SdkTracerProvider},
     Resource,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -80,10 +81,13 @@ pub fn init(config: Option<TelemetryConfig>) -> Result<Option<SdkTracerProvider>
             KeyValue::new("deployment.environment.name", "production"),
         ])
         .build();
+    // The HTTP exporter is async and must run on Tokio. The SDK's default
+    // thread-based batch processor has no Tokio reactor and panics on export.
+    let batch_processor = BatchSpanProcessor::builder(exporter, runtime::Tokio).build();
     let provider = SdkTracerProvider::builder()
         .with_sampler(Sampler::AlwaysOn)
         .with_resource(resource)
-        .with_batch_exporter(exporter)
+        .with_span_processor(batch_processor)
         .build();
 
     global::set_text_map_propagator(TraceContextPropagator::new());
