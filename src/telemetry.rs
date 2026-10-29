@@ -43,10 +43,11 @@ impl TelemetryConfig {
         endpoint: Option<String>,
     ) -> Option<Self> {
         let license_key = non_empty(license_key)?;
+        let endpoint = non_empty(endpoint).unwrap_or_else(|| DEFAULT_OTLP_ENDPOINT.to_owned());
         Some(Self {
             license_key,
             app_name: non_empty(app_name).unwrap_or_else(|| DEFAULT_APP_NAME.to_owned()),
-            endpoint: non_empty(endpoint).unwrap_or_else(|| DEFAULT_OTLP_ENDPOINT.to_owned()),
+            endpoint: trace_endpoint(&endpoint),
         })
     }
 }
@@ -107,9 +108,20 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// `with_endpoint` expects the complete signal URL; unlike the standard OTLP
+/// environment variable, it does not append `/v1/traces` to a base URL.
+fn trace_endpoint(endpoint: &str) -> String {
+    let endpoint = endpoint.trim_end_matches('/');
+    if endpoint.ends_with("/v1/traces") {
+        endpoint.to_owned()
+    } else {
+        format!("{endpoint}/v1/traces")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TelemetryConfig, DEFAULT_APP_NAME, DEFAULT_OTLP_ENDPOINT};
+    use super::{trace_endpoint, TelemetryConfig, DEFAULT_APP_NAME, DEFAULT_OTLP_ENDPOINT};
 
     #[test]
     fn absent_or_blank_key_disables_telemetry() {
@@ -121,7 +133,10 @@ mod tests {
     fn defaults_are_applied() {
         let config = TelemetryConfig::from_values(Some("license".to_owned()), None, None).unwrap();
         assert_eq!(config.app_name, DEFAULT_APP_NAME);
-        assert_eq!(config.endpoint, DEFAULT_OTLP_ENDPOINT);
+        assert_eq!(
+            config.endpoint,
+            format!("{DEFAULT_OTLP_ENDPOINT}/v1/traces")
+        );
     }
 
     #[test]
@@ -134,6 +149,18 @@ mod tests {
         .unwrap();
         assert_eq!(config.license_key, "license");
         assert_eq!(config.app_name, "recipes-mcp");
-        assert_eq!(config.endpoint, "https://example.test:4318");
+        assert_eq!(config.endpoint, "https://example.test:4318/v1/traces");
+    }
+
+    #[test]
+    fn trace_endpoint_appends_signal_path_once() {
+        assert_eq!(
+            trace_endpoint("https://example.test:4318/"),
+            "https://example.test:4318/v1/traces"
+        );
+        assert_eq!(
+            trace_endpoint("https://example.test:4318/v1/traces"),
+            "https://example.test:4318/v1/traces"
+        );
     }
 }
