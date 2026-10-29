@@ -18,6 +18,7 @@
 //! - `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: Least-privilege thumbnail credentials
 //! - `NEW_RELIC_LICENSE_KEY`: Enables New Relic tracing when non-empty
 //! - `NEW_RELIC_APP_NAME`, `NEW_RELIC_OTLP_ENDPOINT`: Trace service and destination
+//! - `NEW_RELIC_ENVIRONMENT_NAME`: Optional `deployment.environment.name` (e.g. `production`)
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
 
 use mcp_tandoor::{
@@ -139,9 +140,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     if let Some(provider) = tracer_provider {
-        if let Err(error) = provider.shutdown() {
-            tracing::warn!(%error, "Could not flush all telemetry during shutdown");
-        }
+        telemetry::shutdown(provider).await;
     }
 
     Ok(())
@@ -153,9 +152,37 @@ fn non_empty_secret(value: Option<String>) -> Option<String> {
         .filter(|secret| !secret.is_empty())
 }
 
+/// Resolve on SIGINT (Ctrl-C) or SIGTERM.
+///
+/// The binary is PID 1 in its container with no init process, so Docker's
+/// SIGTERM must be handled here or `docker stop` waits for the kill timeout
+/// and buffered telemetry is never flushed.
 async fn shutdown_signal() {
-    if let Err(error) = tokio::signal::ctrl_c().await {
-        tracing::error!("Failed to listen for shutdown signal: {error}");
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::error!("Failed to listen for SIGINT: {error}");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut stream) => {
+                stream.recv().await;
+            }
+            Err(error) => {
+                tracing::error!("Failed to listen for SIGTERM: {error}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
     }
     tracing::info!("Shutting down...");
 }

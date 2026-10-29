@@ -7752,7 +7752,7 @@ impl ServerHandler for TandoorMcpServer {
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let span = tracing::info_span!(
             "mcp.tool_call",
-            otel.name = %format!("tools/call {tool}"),
+            otel.name = format!("tools/call {tool}").as_str(),
             otel.kind = "server",
             otel.status_code = tracing::field::Empty,
             otel.status_message = tracing::field::Empty,

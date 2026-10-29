@@ -197,6 +197,7 @@ curl -X GET http://your-tandoor-url/api/keyword/ \
 | `NEW_RELIC_LICENSE_KEY` | Enables New Relic OTLP tracing when non-empty            | Disabled                 |
 | `NEW_RELIC_APP_NAME`  | New Relic/OpenTelemetry service name                        | `tandoor-mcp`             |
 | `NEW_RELIC_OTLP_ENDPOINT` | New Relic OTLP/HTTP base endpoint                      | US endpoint              |
+| `NEW_RELIC_ENVIRONMENT_NAME` | Optional `deployment.environment.name` trace attribute | Unset                 |
 | `RUST_LOG`           | Log level (`info`, `debug`, `trace`, …)                   | `info`                   |
 
 `TANDOOR_AUTH_TOKEN` is strongly preferred. Tandoor limits the `/api-token-auth/` login endpoint to **10 requests per day per IP**; a token bypasses this entirely.

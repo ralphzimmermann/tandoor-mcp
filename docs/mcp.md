@@ -60,6 +60,8 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
 - `NEW_RELIC_APP_NAME`: trace service name; default `tandoor-mcp`.
 - `NEW_RELIC_OTLP_ENDPOINT`: OTLP/HTTP base endpoint; defaults to New Relic's
   US endpoint. EU accounts should use `https://otlp.eu01.nr-data.net:4318`.
+- `NEW_RELIC_ENVIRONMENT_NAME`: optional `deployment.environment.name`
+  attribute (for example `production`). Omitted when blank.
 - `RUST_LOG`: tracing filter; default `info`. At `info` every `tools/call`
   logs one line on entry (tool name and argument keys, never values) and one on
   exit (ok / tool error / rejected), so a ChatGPT call that fails before it

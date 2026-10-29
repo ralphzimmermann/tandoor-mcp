@@ -25,6 +25,10 @@ pub struct TelemetryConfig {
     license_key: String,
     app_name: String,
     endpoint: String,
+    /// Optional `deployment.environment.name` resource attribute. Left unset
+    /// rather than defaulted so a developer machine with a key never reports
+    /// itself as production.
+    environment: Option<String>,
 }
 
 impl TelemetryConfig {
@@ -34,6 +38,7 @@ impl TelemetryConfig {
             env::var("NEW_RELIC_LICENSE_KEY").ok(),
             env::var("NEW_RELIC_APP_NAME").ok(),
             env::var("NEW_RELIC_OTLP_ENDPOINT").ok(),
+            env::var("NEW_RELIC_ENVIRONMENT_NAME").ok(),
         )
     }
 
@@ -41,6 +46,7 @@ impl TelemetryConfig {
         license_key: Option<String>,
         app_name: Option<String>,
         endpoint: Option<String>,
+        environment: Option<String>,
     ) -> Option<Self> {
         let license_key = non_empty(license_key)?;
         let endpoint = non_empty(endpoint).unwrap_or_else(|| DEFAULT_OTLP_ENDPOINT.to_owned());
@@ -48,6 +54,7 @@ impl TelemetryConfig {
             license_key,
             app_name: non_empty(app_name).unwrap_or_else(|| DEFAULT_APP_NAME.to_owned()),
             endpoint: trace_endpoint(&endpoint),
+            environment: non_empty(environment),
         })
     }
 }
@@ -75,12 +82,16 @@ pub fn init(config: Option<TelemetryConfig>) -> Result<Option<SdkTracerProvider>
         .build()
         .context("could not build the New Relic OTLP exporter")?;
 
-    let resource = Resource::builder_empty()
+    // `Resource::builder()` keeps the SDK detector so `telemetry.sdk.*`
+    // attributes reach New Relic, which uses them for entity language and
+    // instrumentation-version views.
+    let mut attributes = vec![KeyValue::new("service.version", env!("CARGO_PKG_VERSION"))];
+    if let Some(environment) = config.environment {
+        attributes.push(KeyValue::new("deployment.environment.name", environment));
+    }
+    let resource = Resource::builder()
         .with_service_name(config.app_name)
-        .with_attributes([
-            KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-            KeyValue::new("deployment.environment.name", "production"),
-        ])
+        .with_attributes(attributes)
         .build();
     // The HTTP exporter is async and must run on Tokio. The SDK's default
     // thread-based batch processor has no Tokio reactor and panics on export.
@@ -100,6 +111,24 @@ pub fn init(config: Option<TelemetryConfig>) -> Result<Option<SdkTracerProvider>
         .init();
 
     Ok(Some(provider))
+}
+
+/// Flush buffered spans and stop the exporter.
+///
+/// The Tokio-runtime batch processor's `shutdown` blocks the calling thread on
+/// a oneshot that its own Tokio task must answer (it ignores its timeout). From
+/// the root future that is merely a stalled main thread; from a spawned task
+/// on a single-worker runtime (one-vCPU hosts) it deadlocks the whole runtime.
+/// Running it on the blocking pool is safe from either place.
+pub async fn shutdown(provider: SdkTracerProvider) {
+    let result = tokio::task::spawn_blocking(move || provider.shutdown()).await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "Could not flush all telemetry during shutdown")
+        }
+        Err(error) => tracing::warn!(%error, "Telemetry shutdown task failed"),
+    }
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
@@ -125,18 +154,20 @@ mod tests {
 
     #[test]
     fn absent_or_blank_key_disables_telemetry() {
-        assert!(TelemetryConfig::from_values(None, None, None).is_none());
-        assert!(TelemetryConfig::from_values(Some(" \n\t".to_owned()), None, None).is_none());
+        assert!(TelemetryConfig::from_values(None, None, None, None).is_none());
+        assert!(TelemetryConfig::from_values(Some(" \n\t".to_owned()), None, None, None).is_none());
     }
 
     #[test]
     fn defaults_are_applied() {
-        let config = TelemetryConfig::from_values(Some("license".to_owned()), None, None).unwrap();
+        let config =
+            TelemetryConfig::from_values(Some("license".to_owned()), None, None, None).unwrap();
         assert_eq!(config.app_name, DEFAULT_APP_NAME);
         assert_eq!(
             config.endpoint,
             format!("{DEFAULT_OTLP_ENDPOINT}/v1/traces")
         );
+        assert_eq!(config.environment, None);
     }
 
     #[test]
@@ -145,11 +176,25 @@ mod tests {
             Some(" license ".to_owned()),
             Some(" recipes-mcp ".to_owned()),
             Some(" https://example.test:4318 ".to_owned()),
+            Some(" staging ".to_owned()),
         )
         .unwrap();
         assert_eq!(config.license_key, "license");
         assert_eq!(config.app_name, "recipes-mcp");
         assert_eq!(config.endpoint, "https://example.test:4318/v1/traces");
+        assert_eq!(config.environment.as_deref(), Some("staging"));
+    }
+
+    #[test]
+    fn blank_environment_is_omitted() {
+        let config = TelemetryConfig::from_values(
+            Some("license".to_owned()),
+            None,
+            None,
+            Some("   ".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(config.environment, None);
     }
 
     #[test]
