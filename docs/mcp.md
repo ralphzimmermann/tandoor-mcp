@@ -118,7 +118,7 @@ Every tool needs an action-oriented description and annotations:
 Update the server instructions when a new tool introduces a required lookup or
 ordering relationship. Keep the first 512 characters self-contained.
 
-The server currently exposes 65 tools. In addition to the original recipe,
+The server currently exposes 66 tools. In addition to the original recipe,
 shopping, pantry, meal-plan, metadata, and cooking-log operations, it supports:
 
 - targeted recipe and ingredient edits, import, deletion, and photos;
@@ -166,6 +166,51 @@ Tandoor preserves their amounts, units, notes, and flags.
 `mealplan_autoinclude_related` preference. It is account-wide, not specific to
 one recipe.
 
+## Recipe field coverage
+
+`get_recipe_details`, `create_recipe`, and `update_recipe` share the recipe
+fields that ChatGPT needs to inspect and maintain: name, description, servings,
+`servings_text`, working and waiting time, `source_url`,
+`show_ingredient_overview`, keywords, steps, nutrition, and recipe-level
+properties. Nutrition uses Tandoor's actual `carbohydrates` field (the client
+previously read a non-existent `carbs`, so carbohydrate values were silently
+dropped) and also includes its free-text `source`.
+
+Tandoor defines these quantities on different bases, and the tool output
+follows Tandoor rather than normalising them:
+
+- `nutrition` is for the whole recipe at its stored servings. Tandoor's model
+  requires every numeric field, so values omitted on create are stored as `0`;
+  on update, omitted values keep their current value.
+- `properties[].amount_per_serving` is per serving (Tandoor's property view
+  labels it "per serving" and multiplies by servings for totals).
+- `food_properties` is Tandoor's computed total per property type, summed from
+  ingredient foods. The tool collapses the per-ingredient breakdown to
+  `type`, `unit`, `total`, and `missing_value` (true when an ingredient lacks a
+  value, so the total is a lower bound).
+
+When `get_recipe_details` is called with `servings`, ingredient amounts,
+`nutrition`, and `food_properties[].total` are all multiplied by the same
+factor; `properties` are not. `base_servings` carries the stored value and
+`scaling_note` states the rule so the model does not have to infer it.
+
+Recipe properties refer to existing property types. Call `get_property_types`
+first, then pass a returned ID or exact case-insensitive name; recipe writes
+never create property types implicitly. Updates upsert properties by type and
+can remove selected types (by name or ID) without replacing unrelated
+properties. Removing a type the recipe does not carry is an error, like
+setting an unknown type, so a misspelled removal does not succeed silently.
+Internally every write sends Tandoor the full property list because its nested
+serializer deletes anything omitted; see `plan_property_changes`.
+
+Detail and write results also expose read-only metadata: `internal`, image,
+rating, last-cooked time, creator, timestamps, and step attachment metadata.
+Row ids of nutrition and property records are not exposed because writes
+address them as a whole or by type. `internal` remains forced to `true` for MCP
+writes. Privacy/sharing, diameter fields, storage paths, and generated image
+variants are intentionally not exposed. The former `source_title` update
+argument was removed because it is not a Tandoor recipe field.
+
 ## Tandoor API shape notes
 
 Recent Tandoor responses diverge from older id-only fields. The client types
@@ -185,8 +230,8 @@ accept both shapes:
 - A step's `file` is `null` or a nested `UserFile` object (`id`, `name`,
   `media_url`, `media_type`, ...), never a path string. A video attached to one
   step made every `get_recipe_details` call for that recipe fail until
-  `Step.file` became a typed `StepFile`; the field is not exposed in tool
-  output yet.
+  `Step.file` became a typed `StepFile`; detail output exposes its stable ID,
+  name, and media type.
 - Food recipe references may be a bare ID or a nested recipe summary.
 - Supermarket categories may be nested objects rather than integer ids.
 

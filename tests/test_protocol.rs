@@ -251,6 +251,7 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
         "delete_meal_plan",
         "get_meal_types",
         "get_keywords",
+        "get_property_types",
         "get_units",
         "get_cook_log",
         "log_cooked_recipe",
@@ -284,6 +285,7 @@ async fn chatgpt_discovery_and_tools_are_stateless_and_annotated() {
     assert_eq!(annotation("update_pantry")["idempotentHint"], true);
     assert_eq!(annotation("merge_foods")["destructiveHint"], true);
     assert_eq!(annotation("get_recipe_books")["readOnlyHint"], true);
+    assert_eq!(annotation("get_property_types")["readOnlyHint"], true);
     assert_eq!(
         annotation("find_unlinked_recipe_ingredients")["readOnlyHint"],
         true

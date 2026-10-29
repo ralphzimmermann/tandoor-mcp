@@ -45,7 +45,7 @@ use rmcp::model::ContentBlock as Content;
 ///
 /// The opening paragraph is deliberately self-contained because ChatGPT gives the
 /// first 512 characters of MCP instructions special prominence.
-pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, and get_meal_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. Whenever you present one or more recipes to the user (for example after search_recipes), call get_recipe_gallery with their ids before answering so the photos render inline, even if the user did not ask for images; skip it only for has_photo: false cleanup searches or when the user asks for text only. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Recipe photos: set_recipe_image takes a public HTTPS image URL; set_recipe_image_from_file takes a photo attached to the chat (uploaded by the user or generated here): pass the attachment itself as the image argument and ChatGPT fills in the file object; never pass a /mnt/data path, sandbox: URL, or hand-built object, and never tell the user an attachment cannot be used. Both accept JPEG, PNG, WebP, or GIF up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
+pub const SERVER_INSTRUCTIONS: &str = "This server manages one shared Tandoor Recipes kitchen; it is not the user's personal ChatGPT data. Read tools do not change data. Write tools change the shared kitchen. Always confirm before destructive tools. Look up identifiers before writing: use search_recipes, search_foods, get_recipe_books, get_shopping_lists, get_supermarkets, get_meal_types, and get_property_types as appropriate. Dates use YYYY-MM-DD. Never invent identifiers. For recipe-as-ingredient cleanup, call find_unlinked_recipe_ingredients first, explain that a step embed is local while a Food link is global, and confirm the user's choice before linking. Recipe tools search, inspect, create, import, update, delete, and manage photos and books. When a user asks for a meal-plan summary with photos, call get_meal_plan_gallery so the complete card gallery and authoritative thumbnails render in one inline component; do not recreate that image layout in prose. Whenever you present one or more recipes to the user (for example after search_recipes), call get_recipe_gallery with their ids before answering so the photos render inline, even if the user did not ask for images; skip it only for has_photo: false cleanup searches or when the user asks for text only. After a gallery tool, write a normal Markdown summary with recipe names as links, but include no images of any kind (no Markdown images, image lists, carousels, or web-searched or stock photos) and do not call get_recipe_image or get_recipe_details for photos, because the component already shows the authoritative recipe photos. Use get_recipe_image with variant original only when the user asks for full size; never substitute another image. Render recipe names as clickable Markdown links using `recipe_url`. Shopping tools support plain text items, named lists, recipes, meal plans, stores, and aisles. Pantry tools update availability and find or merge duplicate foods. Meal-plan tools read, create, update, and delete plans. Recipe photos: set_recipe_image takes a public HTTPS image URL; set_recipe_image_from_file takes a photo attached to the chat (uploaded by the user or generated here): pass the attachment itself as the image argument and ChatGPT fills in the file object; never pass a /mnt/data path, sandbox: URL, or hand-built object, and never tell the user an attachment cannot be used. Both accept JPEG, PNG, WebP, or GIF up to 20 MB. Composite operations can partially succeed because Tandoor does not provide transactions; inspect returned errors and resulting state.";
 
 // Parameter structs for tools
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -121,12 +121,59 @@ pub struct CreateRecipeParams {
     pub steps: Option<Vec<RecipeStepInput>>,
     #[serde(default)]
     pub servings: Option<i32>,
+    /// Human-readable yield, for example "Makes 1 cup".
+    #[serde(default)]
+    pub servings_text: Option<String>,
     #[serde(default)]
     pub prep_time: Option<i32>,
     #[serde(default)]
     pub cook_time: Option<i32>,
+    /// Web page the recipe came from, if any.
+    #[serde(default)]
+    pub source_url: Option<String>,
+    /// Show the combined ingredient list above the steps in Tandoor's recipe view.
+    #[serde(default)]
+    pub show_ingredient_overview: Option<bool>,
+    /// Nutrition for the whole recipe at `servings`. Values you omit are stored as 0,
+    /// not as unknown; omit `nutrition` entirely if you have no data.
+    #[serde(default)]
+    pub nutrition: Option<NutritionInput>,
+    /// Recipe-level properties (amount per serving). Call get_property_types before setting these.
+    #[serde(default)]
+    pub properties: Option<Vec<RecipePropertyInput>>,
     #[serde(default)]
     pub keywords: Option<Vec<String>>,
+}
+
+/// Nutrition values for the whole recipe at its stored `servings`, matching how
+/// Tandoor stores them. Tandoor requires every numeric field, so a value that is
+/// omitted on create is stored as 0; on update it keeps its current value.
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct NutritionInput {
+    /// Energy in kcal for the whole recipe.
+    #[serde(default)]
+    pub calories: Option<f64>,
+    /// Carbohydrates in grams for the whole recipe.
+    #[serde(default)]
+    pub carbohydrates: Option<f64>,
+    /// Fat in grams for the whole recipe.
+    #[serde(default)]
+    pub fats: Option<f64>,
+    /// Protein in grams for the whole recipe.
+    #[serde(default)]
+    pub proteins: Option<f64>,
+    /// Free text naming where the values came from, for example "package label".
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct RecipePropertyInput {
+    /// Existing property type name or ID from get_property_types.
+    pub property_type: NameOrId,
+    /// Amount per serving in the property type's unit; omit to store an unspecified amount.
+    #[serde(default)]
+    pub amount: Option<f64>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -730,6 +777,13 @@ fn steps_view(
                 "name": step.name,
                 "instruction": step.instruction,
                 "time": step.time,
+                "show_as_header": step.show_as_header,
+                "show_ingredients_table": step.show_ingredients_table,
+                "file": step.file.as_ref().map(|file| json!({
+                    "id": file.id,
+                    "name": file.name,
+                    "media_type": file.media_type
+                })),
                 "step_recipe": step.step_recipe.map(|id| json!({
                     "id": id,
                     "name": linked_name,
@@ -959,6 +1013,15 @@ pub enum ShoppingRef {
 pub enum NameOrId {
     Id(i64),
     Name(String),
+}
+
+impl std::fmt::Display for NameOrId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NameOrId::Id(id) => write!(f, "ID {id}"),
+            NameOrId::Name(name) => write!(f, "\"{name}\""),
+        }
+    }
 }
 
 /// Finds the object a NameOrId points to among `items` (JSON objects with "id" and
@@ -1243,6 +1306,282 @@ fn keyword_names(keywords: &[crate::client::types::Keyword]) -> Vec<&str> {
         .chain(rest)
         .map(|k| k.name.as_str())
         .collect()
+}
+
+fn merge_nutrition(
+    current: Option<&crate::client::types::Nutrition>,
+    input: &NutritionInput,
+) -> crate::client::types::NutritionRequest {
+    crate::client::types::NutritionRequest {
+        id: current.and_then(|value| value.id),
+        calories: input
+            .calories
+            .or_else(|| current.and_then(|value| value.calories))
+            .unwrap_or(0.0),
+        carbohydrates: input
+            .carbohydrates
+            .or_else(|| current.and_then(|value| value.carbohydrates))
+            .unwrap_or(0.0),
+        fats: input
+            .fats
+            .or_else(|| current.and_then(|value| value.fats))
+            .unwrap_or(0.0),
+        proteins: input
+            .proteins
+            .or_else(|| current.and_then(|value| value.proteins))
+            .unwrap_or(0.0),
+        source: input
+            .source
+            .clone()
+            .or_else(|| current.and_then(|value| value.source.clone())),
+    }
+}
+
+fn property_type_for_input<'a>(
+    target: &NameOrId,
+    types: &'a [crate::client::types::PropertyType],
+) -> Result<&'a crate::client::types::PropertyType, String> {
+    let found = match target {
+        NameOrId::Id(id) => types.iter().find(|value| i64::from(value.id) == *id),
+        NameOrId::Name(name) => types
+            .iter()
+            .find(|value| value.name.trim().eq_ignore_ascii_case(name.trim())),
+    };
+    found.ok_or_else(|| {
+        let available = types
+            .iter()
+            .map(|value| value.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Unknown recipe property type. Call get_property_types first. Available types: {available}"
+        )
+    })
+}
+
+/// Plan the full `properties` list Tandoor must receive for a recipe write.
+///
+/// Tandoor's nested serializer deletes any existing property that is absent
+/// from the submitted list, so the result always carries every property that
+/// should remain: current ones minus `remove`, then `set` upserted by type.
+/// Removals are resolved against the recipe's current properties and an
+/// unknown entry is an error, mirroring how `set` rejects unknown types.
+fn plan_property_changes(
+    current: &[crate::client::types::Property],
+    set: &[RecipePropertyInput],
+    remove: &[NameOrId],
+    types: &[crate::client::types::PropertyType],
+) -> Result<Vec<crate::client::types::PropertyRequest>, String> {
+    let current_types = current
+        .iter()
+        .map(|property| property.property_type.clone())
+        .collect::<Vec<_>>();
+    let mut removed = std::collections::HashSet::new();
+    for target in remove {
+        match property_type_for_input(target, &current_types) {
+            Ok(property_type) => {
+                removed.insert(property_type.id);
+            }
+            Err(_) => {
+                let present = current_types
+                    .iter()
+                    .map(|value| value.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "Cannot remove property {target}: the recipe has no property of that type. Current properties: {present}"
+                ));
+            }
+        }
+    }
+    let mut result = current
+        .iter()
+        .filter(|property| !removed.contains(&property.property_type.id))
+        .map(|property| crate::client::types::PropertyRequest {
+            id: property.id,
+            property_amount: property.property_amount,
+            property_type: crate::client::types::PropertyTypeReference {
+                id: property.property_type.id,
+                name: property.property_type.name.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+
+    for input in set {
+        let property_type = property_type_for_input(&input.property_type, types)?;
+        let existing = current
+            .iter()
+            .find(|property| property.property_type.id == property_type.id);
+        result.retain(|property| property.property_type.id != property_type.id);
+        result.push(crate::client::types::PropertyRequest {
+            id: existing.and_then(|property| property.id),
+            property_amount: input.amount,
+            property_type: crate::client::types::PropertyTypeReference {
+                id: property_type.id,
+                name: property_type.name.clone(),
+            },
+        });
+    }
+    Ok(result)
+}
+
+fn recipe_scalar_body(params: &UpdateRecipeParams) -> serde_json::Map<String, serde_json::Value> {
+    let mut body = serde_json::Map::new();
+    body.insert("id".to_string(), json!(params.id));
+    body.insert("internal".to_string(), json!(true));
+    for (key, value) in [
+        ("name", params.name.as_ref().map(|value| json!(value))),
+        (
+            "description",
+            params.description.as_ref().map(|value| json!(value)),
+        ),
+        ("servings", params.servings.map(|value| json!(value))),
+        (
+            "servings_text",
+            params.servings_text.as_ref().map(|value| json!(value)),
+        ),
+        (
+            "working_time",
+            params.cooking_time.map(|value| json!(value)),
+        ),
+        (
+            "waiting_time",
+            params.waiting_time.map(|value| json!(value)),
+        ),
+        (
+            "source_url",
+            params.source_url.as_ref().map(|value| json!(value)),
+        ),
+        (
+            "show_ingredient_overview",
+            params.show_ingredient_overview.map(|value| json!(value)),
+        ),
+    ] {
+        if let Some(value) = value {
+            body.insert(key.to_string(), value);
+        }
+    }
+    body
+}
+
+/// Nutrition for the whole recipe, multiplied by `factor` when the caller
+/// scaled the recipe. Tandoor stores these values for the recipe at its base
+/// servings (its legacy nutrition card multiplies by the ingredient factor), so
+/// scaling them alongside the ingredients keeps the output self-consistent.
+/// The internal row id is omitted: writes address nutrition as a whole.
+fn nutrition_view(
+    nutrition: Option<&crate::client::types::Nutrition>,
+    factor: f64,
+) -> serde_json::Value {
+    let scaled = |value: Option<f64>| value.map(|amount| amount * factor);
+    match nutrition {
+        Some(nutrition) => json!({
+            "calories": scaled(nutrition.calories),
+            "carbohydrates": scaled(nutrition.carbohydrates),
+            "fats": scaled(nutrition.fats),
+            "proteins": scaled(nutrition.proteins),
+            "source": nutrition.source,
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// Explicit recipe properties. Tandoor defines `property_amount` per serving,
+/// so it is independent of scaling and labelled as such. Row ids are omitted
+/// because writes address properties by type.
+fn properties_view(properties: &[crate::client::types::Property]) -> serde_json::Value {
+    json!(properties
+        .iter()
+        .map(|property| json!({
+            "type_id": property.property_type.id,
+            "type": property.property_type.name,
+            "unit": property.property_type.unit,
+            "amount_per_serving": property.property_amount
+        }))
+        .collect::<Vec<_>>())
+}
+
+/// Summarise Tandoor's computed `food_properties` blob.
+///
+/// Tandoor returns a map keyed by property-type id whose entries also carry a
+/// per-ingredient `food_values` breakdown. Only the totals are useful to the
+/// model, so each entry collapses to its type, the whole-recipe `total`
+/// (scaled by `factor`), and whether any ingredient lacked a value. Unexpected
+/// shapes are passed through untouched rather than dropped.
+fn food_properties_view(value: Option<&serde_json::Value>, factor: f64) -> serde_json::Value {
+    let Some(value) = value else {
+        return serde_json::Value::Null;
+    };
+    let Some(entries) = value.as_object() else {
+        return value.clone();
+    };
+    let mut summary = entries
+        .values()
+        .filter_map(|entry| {
+            let entry = entry.as_object()?;
+            Some(json!({
+                "type_id": entry.get("id"),
+                "type": entry.get("name"),
+                "unit": entry.get("unit"),
+                "total": entry.get("total_value").and_then(|v| v.as_f64()).map(|v| v * factor),
+                "missing_value": entry.get("missing_value").and_then(|v| v.as_bool()).unwrap_or(false)
+            }))
+        })
+        .collect::<Vec<_>>();
+    summary.sort_by_key(|entry| entry["type_id"].as_i64());
+    json!(summary)
+}
+
+fn recipe_fields_view(
+    recipe: &crate::client::types::Recipe,
+    client: &TandoorClient,
+) -> serde_json::Map<String, serde_json::Value> {
+    let created_by = recipe.created_by.as_ref().map(|creator| match creator {
+        crate::client::types::UserOrId::Id(id) => json!({"id": id}),
+        crate::client::types::UserOrId::User(user) => {
+            json!({"id": user.id, "username": user.username, "display_name": user.display_name})
+        }
+    });
+    let mut result = serde_json::Map::new();
+    result.insert("id".to_string(), json!(recipe.id));
+    result.insert("name".to_string(), json!(recipe.name));
+    result.insert(
+        "recipe_url".to_string(),
+        json!(client.recipe_url(recipe.id)),
+    );
+    result.insert("description".to_string(), json!(recipe.description));
+    result.insert("servings".to_string(), json!(recipe.servings));
+    result.insert("servings_text".to_string(), json!(recipe.servings_text));
+    result.insert("working_time".to_string(), json!(recipe.working_time));
+    result.insert("waiting_time".to_string(), json!(recipe.waiting_time));
+    result.insert(
+        "total_time".to_string(),
+        json!(recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0)),
+    );
+    result.insert("source_url".to_string(), json!(recipe.source_url));
+    result.insert(
+        "show_ingredient_overview".to_string(),
+        json!(recipe.show_ingredient_overview),
+    );
+    result.insert("internal".to_string(), json!(recipe.internal));
+    result.insert(
+        "keywords".to_string(),
+        json!(keyword_names(&recipe.keywords)),
+    );
+    result.insert(
+        "nutrition".to_string(),
+        nutrition_view(recipe.nutrition.as_ref(), 1.0),
+    );
+    result.insert(
+        "properties".to_string(),
+        properties_view(&recipe.properties),
+    );
+    result.insert("rating".to_string(), json!(recipe.rating));
+    result.insert("last_cooked".to_string(), json!(recipe.last_cooked));
+    result.insert("created_by".to_string(), json!(created_by));
+    result.insert("created".to_string(), json!(recipe.created));
+    result.insert("updated".to_string(), json!(recipe.updated));
+    result
 }
 
 /// Build a gallery result without exposing presigned bearer URLs to the model.
@@ -1711,13 +2050,32 @@ pub struct UpdateRecipeParams {
     #[serde(default)]
     pub servings: Option<i64>,
     #[serde(default)]
+    pub servings_text: Option<String>,
+    #[serde(default)]
     pub cooking_time: Option<i64>,
     #[serde(default)]
     pub waiting_time: Option<i64>,
+    /// Web page the recipe came from, if any.
     #[serde(default)]
     pub source_url: Option<String>,
+    /// Show the combined ingredient list above the steps in Tandoor's recipe view.
     #[serde(default)]
-    pub source_title: Option<String>,
+    pub show_ingredient_overview: Option<bool>,
+    /// Partial nutrition update for the whole recipe; omitted values keep their current
+    /// values (or 0 if the recipe had no nutrition yet).
+    #[serde(default)]
+    pub nutrition: Option<NutritionInput>,
+    /// Remove the complete nutrition record.
+    #[serde(default)]
+    pub remove_nutrition: Option<bool>,
+    /// Add or replace properties by property type (amount per serving). Call
+    /// get_property_types first.
+    #[serde(default)]
+    pub set_properties: Option<Vec<RecipePropertyInput>>,
+    /// Property types to remove from this recipe, by name (case-insensitive) or ID.
+    /// Fails if the recipe has no property of that type.
+    #[serde(default)]
+    pub remove_properties: Option<Vec<NameOrId>>,
     /// Edit specific existing steps (instruction, name, time, and that step's ingredients).
     /// Steps not listed are left untouched. Preferred way to change steps.
     #[serde(default)]
@@ -2439,6 +2797,7 @@ impl TandoorMcpServer {
                             "has_photo": recipe.image.is_some(),
                             "image": recipe.image,
                             "servings": recipe.servings,
+                            "servings_text": recipe.servings_text,
                             "keywords": keyword_names(&recipe.keywords),
                             "rating": recipe.rating,
                             "last_cooked": recipe.last_cooked,
@@ -2665,7 +3024,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Get comprehensive recipe information and attach its authoritative thumbnail by default. Pass image: original only when full resolution is required, or image: none to omit it. `steps` lists each step with its ingredients. Amounts are scaled if `servings` is given.",
+        description = "Get comprehensive recipe information, including servings_text, source_url, nutrition, recipe properties, metadata, steps, and ingredients, and attach its authoritative thumbnail by default. Pass image: original only when full resolution is required, or image: none to omit it. Amounts are scaled if `servings` is given.",
         annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn get_recipe_details(
@@ -2788,30 +3147,38 @@ impl TandoorMcpServer {
                     _ => "No photo is stored for this recipe; do not substitute an unrelated, web-searched, or stock image.",
                 };
 
-                let result = json!({
-                    "id": recipe.id,
-                    "name": recipe.name,
-                    "recipe_url": client.recipe_url(recipe.id),
-                    "description": recipe.description,
-                    "steps": steps,
-                    "ingredients": ingredients,
-                    "servings": params.servings.unwrap_or(recipe.servings.unwrap_or(1)),
-                    "working_time": recipe.working_time,
-                    "waiting_time": recipe.waiting_time,
-                    "total_time": recipe.working_time.unwrap_or(0) + recipe.waiting_time.unwrap_or(0),
-                    "keywords": keyword_names(&recipe.keywords),
-                    "image": recipe.image,
-                    "requested_image_variant": params.image,
-                    "image_status": image_status,
-                    "image_instruction": image_instruction,
-                    "nutrition": recipe.nutrition,
-                    "created": recipe.created,
-                    "updated": recipe.updated,
-                    "scaling_applied": scaling_factor != 1.0
-                });
+                // Ingredient amounts, nutrition, and computed food-property totals
+                // describe the whole recipe and scale together; `properties` are per
+                // serving in Tandoor and therefore do not. `base_servings` keeps the
+                // stored value visible when `servings` reflects the request.
+                let mut result = recipe_fields_view(&recipe, &client);
+                result.insert("steps".to_string(), json!(steps));
+                result.insert("ingredients".to_string(), json!(ingredients));
+                result.insert(
+                    "servings".to_string(),
+                    json!(params.servings.unwrap_or(recipe.servings.unwrap_or(1))),
+                );
+                result.insert("base_servings".to_string(), json!(recipe.servings));
+                result.insert(
+                    "nutrition".to_string(),
+                    nutrition_view(recipe.nutrition.as_ref(), scaling_factor),
+                );
+                result.insert(
+                    "food_properties".to_string(),
+                    food_properties_view(recipe.food_properties.as_ref(), scaling_factor),
+                );
+                result.insert("image".to_string(), json!(recipe.image));
+                result.insert("requested_image_variant".to_string(), json!(params.image));
+                result.insert("image_status".to_string(), json!(image_status));
+                result.insert("image_instruction".to_string(), json!(image_instruction));
+                result.insert("scaling_applied".to_string(), json!(scaling_factor != 1.0));
+                result.insert(
+                    "scaling_note".to_string(),
+                    json!("ingredients, nutrition, and food_properties totals are for the whole recipe at `servings`; properties[].amount_per_serving is per serving and never scaled"),
+                );
 
                 let mut content = vec![Content::text(
-                    serde_json::to_string_pretty(&result).unwrap(),
+                    serde_json::to_string_pretty(&serde_json::Value::Object(result)).unwrap(),
                 )];
                 if let Some((bytes, mime_type)) = image_attachment {
                     content.push(Content::image(BASE64_STANDARD.encode(bytes), mime_type));
@@ -2831,7 +3198,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Create a new internally managed recipe. Use `steps` to add structured steps, each with the ingredients used in that step (food, unit, amount, note; omit amount for to-taste ingredients) — recommended. `instructions` is a legacy fallback that creates a single step with no ingredients.",
+        description = "Create a new internally managed recipe. Supports servings_text, source_url, show_ingredient_overview, nutrition, and recipe-level properties; call get_property_types before setting properties. Use `steps` to add structured steps with their ingredients. `instructions` is a legacy single-step fallback.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2886,34 +3253,47 @@ impl TandoorMcpServer {
             vec![]
         };
 
+        let properties = if let Some(inputs) = params.properties.as_deref() {
+            let types = match client.list_property_types().await {
+                Ok(response) => response.results,
+                Err(error) => return tool_err("Failed to load property types", error),
+            };
+            match plan_property_changes(&[], inputs, &[], &types) {
+                Ok(properties) => Some(properties),
+                Err(error) => return tool_err("Invalid recipe properties", error),
+            }
+        } else {
+            None
+        };
+        let nutrition = params
+            .nutrition
+            .as_ref()
+            .map(|input| merge_nutrition(None, input));
+
         let request = crate::client::types::CreateRecipeRequest {
             name: params.name,
             internal: true,
             description: params.description,
             servings: params.servings,
+            servings_text: params.servings_text,
             working_time: params.prep_time.unwrap_or(0),
             waiting_time: params.cook_time.unwrap_or(0),
+            source_url: params.source_url,
+            show_ingredient_overview: params.show_ingredient_overview,
+            nutrition,
+            properties,
             keywords,
             steps,
         };
 
         match client.create_recipe(request).await {
             Ok(recipe) => {
-                let result = json!({
-                    "id": recipe.id,
-                    "name": recipe.name,
-                    "recipe_url": client.recipe_url(recipe.id),
-                    "description": recipe.description,
-                    "servings": recipe.servings,
-                    "working_time": recipe.working_time,
-                    "waiting_time": recipe.waiting_time,
-                    "created": recipe.created,
-                    "success": true,
-                    "message": "Recipe created successfully"
-                });
+                let mut result = recipe_fields_view(&recipe, &client);
+                result.insert("success".to_string(), json!(true));
+                result.insert("message".to_string(), json!("Recipe created successfully"));
 
                 Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&result).unwrap(),
+                    serde_json::to_string_pretty(&serde_json::Value::Object(result)).unwrap(),
                 )]))
             }
             Err(e) => {
@@ -3495,6 +3875,26 @@ impl TandoorMcpServer {
                     serde_json::to_string_pretty(&error_details).unwrap(),
                 )]))
             }
+        }
+    }
+
+    #[tool(
+        description = "Get all existing recipe property types. Use an ID or exact name from this result when setting recipe-level properties.",
+        annotations(read_only_hint = true, open_world_hint = true)
+    )]
+    async fn get_property_types(&self) -> Result<CallToolResult, McpError> {
+        let client = auth_or_return!(self);
+        match client.list_property_types().await {
+            Ok(response) => tool_ok(json!({
+                "property_types": response.results.into_iter().map(|property_type| json!({
+                    "id": property_type.id,
+                    "name": property_type.name,
+                    "unit": property_type.unit,
+                    "description": property_type.description
+                })).collect::<Vec<_>>(),
+                "total_count": response.count
+            })),
+            Err(error) => tool_err("Failed to get property types", error),
         }
     }
 
@@ -4954,7 +5354,7 @@ impl TandoorMcpServer {
     }
 
     #[tool(
-        description = "Update an existing recipe and mark it as internally managed. Top-level content fields (name, description, servings, cooking_time, waiting_time, source_url, source_title) change only what you pass. Keywords/tags: `add_keywords` / `remove_keywords` (by name) change just those; `replace_all_keywords` is a FULL REPLACEMENT of the keyword list. To edit steps, call get_recipe_details first and refer to steps by their step_number: `step_updates` edits specific steps and their ingredients (add_ingredients, remove_ingredients, update_ingredients to change an amount/unit/note/food in place, or replace_ingredients), `add_steps` inserts new steps, `move_steps` reorders, `remove_steps` deletes; all other steps stay untouched. An ingredient entry of {\"header\": \"For the sauce\"} is a section heading. `replace_all_steps` is a FULL REPLACEMENT that deletes every existing step and ingredient — only use it to rewrite the whole recipe. Returns the recipe's resulting steps so you can verify.",
+        description = "Update an existing recipe and mark it as internally managed. Top-level fields (name, description, servings, servings_text, cooking_time, waiting_time, source_url, show_ingredient_overview) change only what you pass. `nutrition` is a partial update of whole-recipe values; `remove_nutrition` clears it. `set_properties` upserts and `remove_properties` removes recipe properties by type (call get_property_types first). Keywords/tags: `add_keywords` / `remove_keywords` (by name) change just those; `replace_all_keywords` is a FULL REPLACEMENT of the keyword list. To edit steps, call get_recipe_details first and refer to steps by their step_number: `step_updates` edits specific steps and their ingredients (add_ingredients, remove_ingredients, update_ingredients to change an amount/unit/note/food in place, or replace_ingredients), `add_steps` inserts new steps, `move_steps` reorders, `remove_steps` deletes; all other steps stay untouched. An ingredient entry of {\"header\": \"For the sauce\"} is a section heading. `replace_all_steps` is a FULL REPLACEMENT that deletes every existing step and ingredient — only use it to rewrite the whole recipe. Returns the resulting recipe and steps so you can verify.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -4975,32 +5375,7 @@ impl TandoorMcpServer {
             }
         };
 
-        let mut body = serde_json::Map::new();
-        body.insert("id".to_string(), json!(params.id));
-        // Any recipe changed through this server is managed in Tandoor. This
-        // also repairs recipes previously created with `internal: false`.
-        body.insert("internal".to_string(), json!(true));
-        if let Some(v) = params.name {
-            body.insert("name".to_string(), json!(v));
-        }
-        if let Some(v) = params.description {
-            body.insert("description".to_string(), json!(v));
-        }
-        if let Some(v) = params.servings {
-            body.insert("servings".to_string(), json!(v));
-        }
-        if let Some(v) = params.cooking_time {
-            body.insert("working_time".to_string(), json!(v));
-        }
-        if let Some(v) = params.waiting_time {
-            body.insert("waiting_time".to_string(), json!(v));
-        }
-        if let Some(v) = params.source_url {
-            body.insert("source_url".to_string(), json!(v));
-        }
-        if let Some(v) = params.source_title {
-            body.insert("source_title".to_string(), json!(v));
-        }
+        let mut body = recipe_scalar_body(&params);
         let reject = |message: String| {
             Ok(CallToolResult::error(vec![Content::text(
                 json!({"error": "Failed to update recipe", "details": message}).to_string(),
@@ -5016,6 +5391,10 @@ impl TandoorMcpServer {
         let add_kw = params.add_keywords.unwrap_or_default();
         let remove_kw = params.remove_keywords.unwrap_or_default();
         let targeted_keywords = !add_kw.is_empty() || !remove_kw.is_empty();
+        let nutrition_change = params.nutrition.is_some() || params.remove_nutrition == Some(true);
+        let set_properties = params.set_properties.unwrap_or_default();
+        let remove_properties = params.remove_properties.unwrap_or_default();
+        let property_change = !set_properties.is_empty() || !remove_properties.is_empty();
 
         if params.replace_all_steps.is_some() && targeted_steps {
             return reject(
@@ -5029,9 +5408,13 @@ impl TandoorMcpServer {
                     .to_string(),
             );
         }
+        if params.nutrition.is_some() && params.remove_nutrition == Some(true) {
+            return reject("nutrition and remove_nutrition cannot be combined".to_string());
+        }
 
         // Targeted edits are resolved against the recipe as it is now
-        let current = if targeted_steps || targeted_keywords {
+        let current = if targeted_steps || targeted_keywords || nutrition_change || property_change
+        {
             match client.get_recipe(params.id).await {
                 Ok(r) => Some(r),
                 Err(e) => return reject(format!("Failed to load recipe: {e}")),
@@ -5039,6 +5422,50 @@ impl TandoorMcpServer {
         } else {
             None
         };
+
+        if params.remove_nutrition == Some(true) {
+            body.insert("nutrition".to_string(), serde_json::Value::Null);
+        } else if let Some(input) = params.nutrition.as_ref() {
+            let request = merge_nutrition(
+                current
+                    .as_ref()
+                    .and_then(|recipe| recipe.nutrition.as_ref()),
+                input,
+            );
+            body.insert(
+                "nutrition".to_string(),
+                serde_json::to_value(request).expect("NutritionRequest always serializes"),
+            );
+        }
+
+        if property_change {
+            let property_types = if set_properties.is_empty() {
+                Vec::new()
+            } else {
+                match client.list_property_types().await {
+                    Ok(response) => response.results,
+                    Err(error) => return reject(format!("Failed to load property types: {error}")),
+                }
+            };
+            let Some(current_recipe) = current.as_ref() else {
+                return reject("Failed to load current recipe properties".to_string());
+            };
+            match plan_property_changes(
+                &current_recipe.properties,
+                &set_properties,
+                &remove_properties,
+                &property_types,
+            ) {
+                Ok(properties) => {
+                    body.insert(
+                        "properties".to_string(),
+                        serde_json::to_value(properties)
+                            .expect("PropertyRequest always serializes"),
+                    );
+                }
+                Err(error) => return reject(error),
+            }
+        }
 
         if let Some(kws) = params.replace_all_keywords {
             let kw_list: Vec<serde_json::Value> = kws.iter().map(|id| json!({"id": id})).collect();
@@ -5117,20 +5544,13 @@ impl TandoorMcpServer {
             }
         }
 
+        let mut result = recipe_fields_view(&recipe, &client);
+        result.insert(
+            "steps".to_string(),
+            json!(steps_view(&recipe.steps, 1.0, &client)),
+        );
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&json!({
-                "id": recipe.id,
-                "name": recipe.name,
-                "recipe_url": client.recipe_url(recipe.id),
-                "description": recipe.description,
-                "servings": recipe.servings,
-                "working_time": recipe.working_time,
-                "waiting_time": recipe.waiting_time,
-                "keywords": keyword_names(&recipe.keywords),
-                "steps": steps_view(&recipe.steps, 1.0, &client),
-                "updated": recipe.updated
-            }))
-            .unwrap(),
+            serde_json::to_string_pretty(&serde_json::Value::Object(result)).unwrap(),
         )]))
     }
 
@@ -7329,6 +7749,160 @@ mod tests {
     }
 
     #[test]
+    fn merge_nutrition_keeps_id_and_fills_missing_values() {
+        let current: crate::client::types::Nutrition = serde_json::from_value(json!({
+            "id": 9,
+            "calories": 100,
+            "carbohydrates": 20,
+            "fats": 3,
+            "proteins": 4,
+            "source": "old"
+        }))
+        .unwrap();
+        let input: NutritionInput =
+            serde_json::from_value(json!({"calories": 125, "source": "new"})).unwrap();
+        let merged = merge_nutrition(Some(&current), &input);
+        assert_eq!(merged.id, Some(9));
+        assert_eq!(merged.calories, 125.0);
+        assert_eq!(merged.carbohydrates, 20.0);
+        assert_eq!(merged.source.as_deref(), Some("new"));
+
+        let empty: NutritionInput = serde_json::from_value(json!({})).unwrap();
+        let defaults = merge_nutrition(None, &empty);
+        assert_eq!(defaults.calories, 0.0);
+        assert_eq!(defaults.proteins, 0.0);
+    }
+
+    #[test]
+    fn property_changes_upsert_remove_and_reject_unknown_types() {
+        let types: Vec<crate::client::types::PropertyType> = serde_json::from_value(json!([
+            {"id": 1, "name": "Fiber", "unit": "g"},
+            {"id": 2, "name": "Cost", "unit": "EUR"}
+        ]))
+        .unwrap();
+        let current: Vec<crate::client::types::Property> = serde_json::from_value(json!([
+            {"id": 10, "property_amount": 2.0, "property_type": {"id": 1, "name": "Fiber", "unit": "g"}},
+            {"id": 11, "property_amount": 5.0, "property_type": {"id": 2, "name": "Cost", "unit": "EUR"}}
+        ]))
+        .unwrap();
+        let set = vec![RecipePropertyInput {
+            property_type: NameOrId::Name("fiber".to_string()),
+            amount: Some(3.5),
+        }];
+        // Removal by name is case-insensitive; removal by ID also works.
+        let planned = plan_property_changes(
+            &current,
+            &set,
+            &[NameOrId::Name("cost".to_string())],
+            &types,
+        )
+        .unwrap();
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].id, Some(10));
+        assert_eq!(planned[0].property_amount, Some(3.5));
+        let by_id = plan_property_changes(&current, &[], &[NameOrId::Id(2)], &types).unwrap();
+        assert_eq!(by_id.len(), 1);
+        assert_eq!(by_id[0].property_type.id, 1);
+
+        let unknown = vec![RecipePropertyInput {
+            property_type: NameOrId::Name("Unknown".to_string()),
+            amount: Some(1.0),
+        }];
+        let error = plan_property_changes(&current, &unknown, &[], &types).unwrap_err();
+        assert!(error.contains("Available types: Fiber, Cost"), "{error}");
+
+        // Removing a type the recipe does not carry is an error, not a silent no-op.
+        let error = plan_property_changes(
+            &current,
+            &[],
+            &[NameOrId::Name("Sodium".to_string())],
+            &types,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot remove property \"Sodium\"")
+                && error.contains("Current properties: Fiber, Cost"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn nutrition_and_food_properties_views_scale_whole_recipe_values() {
+        let nutrition: crate::client::types::Nutrition = serde_json::from_value(json!({
+            "id": 9, "calories": 100, "carbohydrates": 20, "fats": 3, "proteins": 4, "source": "label"
+        }))
+        .unwrap();
+        let scaled = nutrition_view(Some(&nutrition), 2.0);
+        assert_eq!(scaled["calories"], 200.0);
+        assert_eq!(scaled["carbohydrates"], 40.0);
+        assert_eq!(scaled["source"], "label");
+        assert!(scaled.get("id").is_none(), "row id must not leak: {scaled}");
+        assert!(nutrition_view(None, 2.0).is_null());
+
+        // Tandoor's computed blob: keyed by type id, with a per-food breakdown.
+        let blob = json!({
+            "2": {"id": 2, "name": "Cost", "unit": "EUR", "total_value": 1.5, "missing_value": true,
+                  "food_values": {"7": {"id": 7, "value": null}}},
+            "1": {"id": 1, "name": "Fiber", "unit": "g", "total_value": 4, "missing_value": false,
+                  "food_values": {"7": {"id": 7, "value": 4}}}
+        });
+        let summary = food_properties_view(Some(&blob), 2.0);
+        assert_eq!(
+            summary,
+            json!([
+                {"type_id": 1, "type": "Fiber", "unit": "g", "total": 8.0, "missing_value": false},
+                {"type_id": 2, "type": "Cost", "unit": "EUR", "total": 3.0, "missing_value": true}
+            ])
+        );
+        assert!(food_properties_view(None, 1.0).is_null());
+    }
+
+    #[test]
+    fn properties_view_is_per_serving_without_row_ids() {
+        let properties: Vec<crate::client::types::Property> = serde_json::from_value(json!([
+            {"id": 10, "property_amount": 2.0, "property_type": {"id": 1, "name": "Fiber", "unit": "g"}}
+        ]))
+        .unwrap();
+        assert_eq!(
+            properties_view(&properties),
+            json!([{"type_id": 1, "type": "Fiber", "unit": "g", "amount_per_serving": 2.0}])
+        );
+    }
+
+    #[test]
+    fn scalar_recipe_patch_omits_unset_fields_and_source_title() {
+        let params: UpdateRecipeParams = serde_json::from_value(json!({
+            "id": 7,
+            "servings_text": "Makes a jar",
+            "source_url": "https://example.com"
+        }))
+        .unwrap();
+        let body = recipe_scalar_body(&params);
+        assert_eq!(body["servings_text"], "Makes a jar");
+        assert_eq!(body["source_url"], "https://example.com");
+        assert!(!body.contains_key("description"));
+        assert!(!body.contains_key("source_title"));
+    }
+
+    #[test]
+    fn recipe_fields_view_includes_extended_recipe_fields() {
+        let recipe = recipe(42, "Soup", json!([]));
+        let mut value = serde_json::to_value(&recipe).unwrap();
+        value["servings_text"] = json!("Makes a pot");
+        value["source_url"] = json!("https://example.com/soup");
+        value["nutrition"] = json!({
+            "id": 3, "calories": 100, "carbohydrates": 10,
+            "fats": 2, "proteins": 4, "source": "Calculated"
+        });
+        let recipe: crate::client::types::Recipe = serde_json::from_value(value).unwrap();
+        let client = TandoorClient::new("https://recipes.example".to_string());
+        let view = recipe_fields_view(&recipe, &client);
+        assert_eq!(view["servings_text"], "Makes a pot");
+        assert_eq!(view["source_url"], "https://example.com/soup");
+        assert_eq!(view["nutrition"]["carbohydrates"], 10.0);
+    }
+
+    #[test]
     fn gallery_result_keeps_urls_private_and_stays_small() {
         let result = gallery_result(
             json!({"items": [{"recipe_id": 7, "name": "Soup"}]}),
@@ -8064,7 +8638,7 @@ mod annotation_tests {
     #[test]
     fn every_tool_declares_annotations() {
         let tools = TandoorMcpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 65, "unexpected tool count");
+        assert_eq!(tools.len(), 66, "unexpected tool count");
 
         for tool in &tools {
             let name = tool.name.as_ref();

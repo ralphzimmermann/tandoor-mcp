@@ -1491,6 +1491,41 @@ impl TandoorClient {
         self.get_all_paginated(url, "keywords").await
     }
 
+    /// Return every recipe property type available in the current Tandoor space.
+    pub async fn list_property_types(&self) -> Result<PaginatedResponse<PropertyType>> {
+        let url = format!("{}/api/property-type/?page_size=100", self.base_url);
+        tracing::debug!("Getting all recipe property types from Tandoor: {}", url);
+        self.get_all_paginated(url, "property types").await
+    }
+
+    /// Create a recipe property type. No MCP tool exposes this yet; recipe
+    /// writes deliberately refer to existing types only, so this mainly backs
+    /// integration tests that need a type to attach.
+    pub async fn create_property_type(
+        &self,
+        name: &str,
+        unit: Option<&str>,
+    ) -> Result<PropertyType> {
+        let auth_header = self.get_auth_header()?;
+        let url = format!("{}/api/property-type/", self.base_url);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", auth_header)
+            .json(&serde_json::json!({ "name": name, "unit": unit }))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to Tandoor API: {e}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to create property type: {status} - {error_body}");
+        }
+        Ok(response.json().await?)
+    }
+
     pub async fn get_units(&self) -> Result<PaginatedResponse<Unit>> {
         let auth_header = self.get_auth_header()?;
         let url = format!("{}/api/unit/", self.base_url);
