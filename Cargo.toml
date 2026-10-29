@@ -21,7 +21,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 tracing-opentelemetry = "0.33"
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-rustls"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls"] }
 async-trait = "0.1.89"
 aws-config = { version = "=1.8.13", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3 = { version = "=1.122.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
