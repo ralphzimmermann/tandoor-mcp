@@ -41,6 +41,7 @@ pub mod http;
 mod image;
 pub mod server;
 pub mod storage;
+pub mod telemetry;
 pub mod thumbnail;
 pub mod thumbnail_service;
 

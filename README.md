@@ -194,9 +194,15 @@ curl -X GET http://your-tandoor-url/api/keyword/ \
 | `S3_PUBLIC_BASE_URL`  | Optional browser-visible endpoint used for signed URLs/CSP | Derived                  |
 | `THUMBNAIL_URL_TTL_SECS` | Presigned thumbnail URL lifetime                       | `86400`                  |
 | `THUMBNAIL_MAX_EDGE`  | Generated JPEG longest edge                                | `512`                    |
+| `NEW_RELIC_LICENSE_KEY` | Enables New Relic OTLP tracing when non-empty            | Disabled                 |
+| `NEW_RELIC_APP_NAME`  | New Relic/OpenTelemetry service name                        | `tandoor-mcp`             |
+| `NEW_RELIC_OTLP_ENDPOINT` | New Relic OTLP/HTTP base endpoint                      | US endpoint              |
 | `RUST_LOG`           | Log level (`info`, `debug`, `trace`, …)                   | `info`                   |
 
 `TANDOOR_AUTH_TOKEN` is strongly preferred. Tandoor limits the `/api-token-auth/` login endpoint to **10 requests per day per IP**; a token bypasses this entirely.
+
+See [New Relic tracing](docs/telemetry.md) for the span model and production
+configuration.
 
 The Compose deployment adds `mcp-tandoor` to `MCP_ALLOWED_HOSTS` so the tunnel
 sidecar can use the private service name without disabling host validation.

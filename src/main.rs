@@ -16,24 +16,28 @@
 //! - `S3_BUCKET`: Private bucket used for generated thumbnails (unset disables galleries)
 //! - `S3_REGION`, `S3_ENDPOINT`: S3 region and optional S3-compatible endpoint
 //! - `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: Least-privilege thumbnail credentials
+//! - `NEW_RELIC_LICENSE_KEY`: Enables New Relic tracing when non-empty
+//! - `NEW_RELIC_APP_NAME`, `NEW_RELIC_OTLP_ENDPOINT`: Trace service and destination
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
 
 use mcp_tandoor::{
-    config::ThumbnailConfig, mcp_router, server::TandoorMcpServer, storage::S3ThumbnailStore,
+    config::ThumbnailConfig,
+    mcp_router,
+    server::TandoorMcpServer,
+    storage::S3ThumbnailStore,
+    telemetry::{self, TelemetryConfig},
     thumbnail_service::ThumbnailService,
 };
 use std::{env, net::SocketAddr, sync::Arc};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".to_string().into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let tracer_provider = telemetry::init(TelemetryConfig::from_env())?;
+    if tracer_provider.is_some() {
+        tracing::info!("New Relic tracing enabled");
+    } else {
+        tracing::info!("New Relic tracing disabled");
+    }
 
     let base_url =
         env::var("TANDOOR_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
@@ -133,6 +137,12 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    if let Some(provider) = tracer_provider {
+        if let Err(error) = provider.shutdown() {
+            tracing::warn!(%error, "Could not flush all telemetry during shutdown");
+        }
+    }
 
     Ok(())
 }

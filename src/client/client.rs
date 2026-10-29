@@ -7,12 +7,20 @@ use reqwest::{
     redirect::Policy,
     Client, Url,
 };
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_tracing::TracingMiddleware;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 const MAX_PAGINATION_PAGES: usize = 100;
 const MAX_EMBEDDED_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_RECIPE_IMAGE_REDIRECTS: usize = 3;
+
+fn instrumented_client(client: Client) -> ClientWithMiddleware {
+    ClientBuilder::new(client)
+        .with(TracingMiddleware::default())
+        .build()
+}
 
 /// # Tandoor HTTP Client
 ///
@@ -56,7 +64,7 @@ pub struct TandoorClient {
     /// Base URL of the Tandoor server
     base_url: String,
     /// HTTP client for making requests
-    client: Client,
+    client: ClientWithMiddleware,
     /// Authentication handler
     auth: TandoorAuth,
 }
@@ -64,7 +72,7 @@ pub struct TandoorClient {
 impl TandoorClient {
     pub fn new(base_url: String) -> Self {
         Self {
-            client: Client::new(),
+            client: instrumented_client(Client::new()),
             auth: TandoorAuth::new(base_url.clone()),
             base_url,
         }
@@ -765,11 +773,13 @@ impl TandoorClient {
             RecipeImageSource::Public(url) => return public_recipe_image(&url).await,
         };
         let auth_header = self.get_auth_header()?;
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .timeout(Duration::from_secs(20))
-            .build()
-            .context("Could not create recipe image client")?;
+        let client = instrumented_client(
+            Client::builder()
+                .redirect(Policy::none())
+                .timeout(Duration::from_secs(20))
+                .build()
+                .context("Could not create recipe image client")?,
+        );
 
         for redirect_count in 0..=MAX_RECIPE_IMAGE_REDIRECTS {
             let mut response = client
