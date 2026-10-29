@@ -234,6 +234,10 @@ accept both shapes:
   name, and media type.
 - Food recipe references may be a bare ID or a nested recipe summary.
 - Supermarket categories may be nested objects rather than integer ids.
+- Food sourcing uses two fields: `sourcing_info` is read/write Markdown source,
+  while `sourcing_info_markdown` is read-only HTML rendered and sanitized by
+  Tandoor. MCP Food writes send only the source field. Both fields are optional
+  when connecting to older Tandoor versions.
 
 See `tests/test_api_shapes.rs` for fixtures.
 

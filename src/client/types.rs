@@ -378,6 +378,12 @@ pub struct Food {
     pub plural_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// User-authored Markdown with purchasing guidance.
+    #[serde(default)]
+    pub sourcing_info: Option<String>,
+    /// Server-rendered and sanitized sourcing information.
+    #[serde(default)]
+    pub sourcing_info_markdown: Option<String>,
     /// Recipe represented as an id or nested summary, depending on endpoint.
     #[serde(default)]
     pub recipe: Option<RecipeOrId>,
@@ -522,6 +528,9 @@ pub struct ShoppingFood {
     pub substitute_onhand: bool,
     #[serde(default)]
     pub supermarket_category: Option<serde_json::Value>,
+    /// Server-rendered and sanitized sourcing information from shopping endpoints.
+    #[serde(default)]
+    pub sourcing_info_markdown: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -752,6 +761,12 @@ pub struct CreateCookLogRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NewFoodRequest {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plural_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sourcing_info: Option<String>,
     pub food_onhand: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supermarket_category: Option<SupermarketCategoryRef>,
@@ -762,8 +777,17 @@ pub struct SupermarketCategoryRef {
     pub name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct UpdateFoodRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plural_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sourcing_info: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub food_onhand: Option<bool>,
 }
 

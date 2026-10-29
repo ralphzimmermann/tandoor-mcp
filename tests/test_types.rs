@@ -4,7 +4,7 @@
 //! correctly handle the API response shapes we've observed in the wild, including
 //! the `created_by` field that ships as a full user object rather than an integer.
 
-use mcp_tandoor::client::{Food, PaginatedResponse, Recipe};
+use mcp_tandoor::client::{Food, NewFoodRequest, PaginatedResponse, Recipe, UpdateFoodRequest};
 
 // ── Recipe deserialization ────────────────────────────────────────────────────
 
@@ -99,6 +99,56 @@ fn food_recipe_accepts_id_and_nested_summary() {
     .expect("nested food recipe");
     assert_eq!(nested.recipe.as_ref().unwrap().id(), 12);
     assert_eq!(nested.recipe.as_ref().unwrap().name(), Some("Sauce"));
+}
+
+#[test]
+fn food_sourcing_fields_are_optional_and_readable() {
+    let without_sourcing: Food = serde_json::from_value(serde_json::json!({
+        "id": 5,
+        "name": "Sauce"
+    }))
+    .expect("food without sourcing fields");
+    assert!(without_sourcing.sourcing_info.is_none());
+    assert!(without_sourcing.sourcing_info_markdown.is_none());
+
+    let with_sourcing: Food = serde_json::from_value(serde_json::json!({
+        "id": 6,
+        "name": "Gochujang",
+        "sourcing_info": "Buy **traditionally fermented** products.",
+        "sourcing_info_markdown": "<p>Buy <strong>traditionally fermented</strong> products.</p>"
+    }))
+    .expect("food with sourcing fields");
+    assert_eq!(
+        with_sourcing.sourcing_info.as_deref(),
+        Some("Buy **traditionally fermented** products.")
+    );
+    assert_eq!(
+        with_sourcing.sourcing_info_markdown.as_deref(),
+        Some("<p>Buy <strong>traditionally fermented</strong> products.</p>")
+    );
+}
+
+#[test]
+fn food_write_requests_send_markdown_source_only() {
+    let create = NewFoodRequest {
+        name: "Gochujang".to_string(),
+        plural_name: None,
+        description: None,
+        sourcing_info: Some("## Where to buy".to_string()),
+        food_onhand: false,
+        supermarket_category: None,
+    };
+    let create_json = serde_json::to_value(create).expect("serialize food create");
+    assert_eq!(create_json["sourcing_info"], "## Where to buy");
+    assert!(create_json.get("sourcing_info_markdown").is_none());
+    assert!(create_json.get("description").is_none());
+
+    let update = UpdateFoodRequest {
+        sourcing_info: Some(String::new()),
+        ..UpdateFoodRequest::default()
+    };
+    let update_json = serde_json::to_value(update).expect("serialize food update");
+    assert_eq!(update_json, serde_json::json!({"sourcing_info": ""}));
 }
 
 // ── Keyword deserialization ───────────────────────────────────────────────────

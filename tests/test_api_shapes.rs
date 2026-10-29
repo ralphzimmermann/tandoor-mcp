@@ -145,7 +145,13 @@ fn recipe_step_accepts_attached_file_object() {
 fn shopping_list_accepts_created_at_and_slim_food() {
     let json = r#"{
       "id": 846,
-      "food": {"id": 1946, "name": "Onion", "plural_name": "Onion", "supermarket_category": null},
+      "food": {
+        "id": 1946,
+        "name": "Onion",
+        "plural_name": "Onion",
+        "supermarket_category": null,
+        "sourcing_info_markdown": "<p>Available at the farmers market.</p>"
+      },
       "unit": {"id": 45, "name": "tsp", "plural_name": "tsp", "description": null, "base_unit": null},
       "amount": 0.5,
       "order": 0,
@@ -159,6 +165,10 @@ fn shopping_list_accepts_created_at_and_slim_food() {
     let parsed: ShoppingListEntry = serde_json::from_str(json).expect("shopping entry");
     assert_eq!(parsed.food.name, "Onion");
     assert!(!parsed.food.food_onhand);
+    assert_eq!(
+        parsed.food.sourcing_info_markdown.as_deref(),
+        Some("<p>Available at the farmers market.</p>")
+    );
     assert_eq!(parsed.created_by.as_ref().map(|user| user.id()), Some(1));
 }
 

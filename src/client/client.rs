@@ -509,6 +509,14 @@ impl TandoorClient {
         Ok(food)
     }
 
+    /// Partially update user-maintained Food metadata.
+    pub async fn update_food(&self, id: i32, request: UpdateFoodRequest) -> Result<Food> {
+        let updated = self
+            .api_update("food", i64::from(id), serde_json::to_value(request)?)
+            .await?;
+        Ok(serde_json::from_value(updated)?)
+    }
+
     /// Set or clear the recipe linked globally from a Food record.
     pub async fn set_food_recipe(&self, food_id: i32, recipe: Option<NamedRef>) -> Result<Food> {
         let recipe = recipe
@@ -629,6 +637,7 @@ impl TandoorClient {
         let url = format!("{}/api/food/{}/", self.base_url, food_id);
         let request = UpdateFoodRequest {
             food_onhand: Some(available),
+            ..UpdateFoodRequest::default()
         };
 
         let response = self
@@ -2256,5 +2265,48 @@ mod tests {
         assert!(requests[1].starts_with("GET /api/user-preference/?page_size=100 "));
         assert!(requests[2].starts_with("PATCH /api/user-preference/7/ "));
         assert!(requests[2].contains(r#""mealplan_autoinclude_related":true"#));
+    }
+
+    #[tokio::test]
+    async fn food_sourcing_writes_send_markdown_source_only() {
+        let response = serde_json::json!({
+            "id": 5,
+            "name": "Gochujang",
+            "sourcing_info": "## Where to buy",
+            "sourcing_info_markdown": "<h2>Where to buy</h2>"
+        });
+        let (url, requests) = test_server(vec![response.clone(), response]).await;
+        let mut client = TandoorClient::new(url);
+        client.set_token("test-token".to_string());
+
+        client
+            .create_food(NewFoodRequest {
+                name: "Gochujang".to_string(),
+                plural_name: None,
+                description: None,
+                sourcing_info: Some("## Where to buy".to_string()),
+                food_onhand: false,
+                supermarket_category: None,
+            })
+            .await
+            .unwrap();
+        client
+            .update_food(
+                5,
+                UpdateFoodRequest {
+                    sourcing_info: Some("Prefer fermented products.".to_string()),
+                    ..UpdateFoodRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let requests = requests.await.unwrap();
+        assert!(requests[0].starts_with("POST /api/food/ "));
+        assert!(requests[0].contains(r###""sourcing_info":"## Where to buy""###));
+        assert!(!requests[0].contains("sourcing_info_markdown"));
+        assert!(requests[1].starts_with("PATCH /api/food/5/ "));
+        assert!(requests[1].contains(r#""sourcing_info":"Prefer fermented products.""#));
+        assert!(!requests[1].contains("sourcing_info_markdown"));
     }
 }

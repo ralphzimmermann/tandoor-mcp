@@ -242,6 +242,18 @@ the scope: a step embed is local to one parent recipe, while a Food link is
 global. `get_recipe_details` returns the stable step, ingredient, and food IDs
 required for these tools. See [Recipe relations through MCP](docs/mcp.md).
 
+### Food Management and Sourcing
+
+- `search_foods` — Search reusable Foods and return their descriptions, pantry/category state, raw Markdown `sourcing_info`, and sanitized `sourcing_info_markdown`
+- `get_food` — Retrieve the same fields for one Food by ID
+- `create_food` — Create a Food with optional plural name, description, pantry state, and Markdown sourcing information
+- `update_food` — Partially update those fields; pass `sourcing_info: ""` to clear the sourcing notes
+
+`sourcing_info` is the editable source of truth. `sourcing_info_markdown` is
+rendered and sanitized by Tandoor and is never accepted on writes. These fields
+require a Tandoor release that includes Food sourcing information; older
+instances remain readable but return neither field and reject sourcing writes.
+
 ### Recipe Books
 
 - `get_recipe_books` — List all recipe books/collections, optionally filtered by name
