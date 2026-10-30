@@ -385,7 +385,14 @@ TANDOOR_AUTH_TOKEN=tda_your_token \
 cargo test -- --test-threads=1
 ```
 
-The integration test suite can also be driven through `./scripts/test.sh` which manages a Docker-based Tandoor instance:
+The integration test suite can also be driven through `./scripts/test.sh` which manages a Docker-based Tandoor instance. That instance runs a pinned build of the deployed Recipes fork (`ghcr.io/ralphzimmermann/recipes`, see `web_recipes` in `docker-compose.yml`) rather than upstream's Docker Hub image, so the tests cover the code production runs. If the GHCR package is private, log in once with a token that has `read:packages`:
+
+```bash
+gh auth refresh -s read:packages
+gh auth token | docker login ghcr.io -u <github-user> --password-stdin
+```
+
+Then:
 
 ```bash
 ./scripts/test.sh test           # full run: up, test, down
@@ -417,7 +424,7 @@ GitHub Actions runs on every push and pull request:
 | Job               | What it does                                                         |
 | ----------------- | -------------------------------------------------------------------- |
 | `unit-test`       | fmt, strict clippy, domain/API-shape/protocol tests (no Docker)       |
-| `integration-test`| spins up Postgres + Tandoor, creates a test user, runs all tests     |
+| `integration-test`| spins up Postgres + the pinned fork Tandoor image, creates a test user, runs all tests |
 | `security`        | blocking `cargo audit` for known vulnerabilities                    |
 | `docker-build`    | builds the Docker image and verifies the MCP process starts          |
 

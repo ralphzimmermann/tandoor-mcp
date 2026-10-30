@@ -220,6 +220,31 @@ writes. Privacy/sharing, diameter fields, storage paths, and generated image
 variants are intentionally not exposed. The former `source_title` update
 argument was removed because it is not a Tandoor recipe field.
 
+## Test Tandoor image
+
+Production and staging run the private Recipes fork
+(`ralphzimmermann/recipes`), built from source on the deployment hosts. CI
+and `scripts/test.sh` therefore test against a pinned build of that fork,
+`ghcr.io/ralphzimmermann/recipes:sha-<short>`, published by the fork's
+`build-docker.yml` workflow on pushes to `master` and tags (amd64 only until
+the deploy script pulls instead of building). Upstream
+`vabene1111/recipes:latest` is not used: it drifts independently of what is
+deployed (Tandoor 2.7 removing `/api-token-auth/` surfaced that way) and
+Docker Hub throttles anonymous pulls.
+
+The tag is pinned in two places that must stay in sync: `TANDOOR_IMAGE` in
+`.github/workflows/ci.yml` and `web_recipes` in `docker-compose.yml`
+(`TANDOOR_IMAGE` overrides it locally). Bump the `sha-` tag deliberately after
+the fork's `master` changes; the fork workflow also publishes `master`,
+`latest`, and semver tags for ad-hoc use. The fork's weekly
+`ghcr-retention.yml` keeps only the newest five `sha-`/branch-tagged versions
+and never deletes `master`, `latest`, or semver tags, so a `sha-` pin must be
+bumped before five more `master` pushes land; pin a semver tag for anything
+longer-lived. While the GHCR package is private,
+CI authenticates with `GITHUB_TOKEN` (the package must grant this repository
+access under its "Manage Actions access" setting) and developers log in once
+with a `read:packages` token; see the README's "Running Tests".
+
 ## Tandoor API shape notes
 
 Recent Tandoor responses diverge from older id-only fields. The client types
