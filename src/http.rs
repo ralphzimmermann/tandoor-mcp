@@ -60,6 +60,10 @@ pub fn mcp_router(
             Arc::new(allowed_origins),
             validate_origin,
         ))
+        // Axum applies layers bottom-up: create a request-local hub first,
+        // then attach normalized HTTP details and start its transaction.
+        .layer(sentry::integrations::tower::SentryHttpLayer::new().enable_transaction())
+        .layer(sentry::integrations::tower::NewSentryLayer::<Request>::new_from_top())
 }
 
 async fn validate_origin(

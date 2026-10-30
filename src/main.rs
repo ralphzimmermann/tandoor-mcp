@@ -19,6 +19,9 @@
 //! - `NEW_RELIC_LICENSE_KEY`: Enables New Relic tracing when non-empty
 //! - `NEW_RELIC_APP_NAME`, `NEW_RELIC_OTLP_ENDPOINT`: Trace service and destination
 //! - `NEW_RELIC_ENVIRONMENT_NAME`: Optional `deployment.environment.name` (e.g. `production`)
+//! - `SENTRY_DSN`: Enables Sentry errors and tracing when non-empty
+//! - `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`: Deployment and source-version tags
+//! - `SENTRY_TRACES_SAMPLE_RATE`: Sentry transaction sample rate from 0 to 1
 //! - `RUST_LOG`: Logging level (info, debug, trace, etc.)
 
 use mcp_tandoor::{
@@ -31,9 +34,27 @@ use mcp_tandoor::{
 };
 use std::{env, net::SocketAddr, sync::Arc};
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Sentry must be initialized before Tokio creates worker threads so each
+    // worker inherits the process hub. The guard flushes pending events when
+    // the runtime and application have shut down.
+    let sentry_config = telemetry::SentryConfig::from_env()?;
+    let sentry_enabled = sentry_config.is_enabled();
+    let _sentry_guard = telemetry::init_sentry(sentry_config)?;
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(sentry_enabled))
+}
+
+async fn run(sentry_enabled: bool) -> anyhow::Result<()> {
     let tracer_provider = telemetry::init(TelemetryConfig::from_env())?;
+    if sentry_enabled {
+        tracing::info!("Sentry error monitoring and tracing enabled");
+    } else {
+        tracing::info!("Sentry error monitoring and tracing disabled");
+    }
     if tracer_provider.is_some() {
         tracing::info!("New Relic tracing enabled");
     } else {

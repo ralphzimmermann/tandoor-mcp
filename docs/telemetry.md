@@ -1,4 +1,30 @@
-# New Relic tracing
+# Application telemetry
+
+## Sentry errors and tracing
+
+A non-empty `SENTRY_DSN` enables Sentry. Initialization happens before Tokio
+creates worker threads so every request inherits the process hub:
+
+```env
+SENTRY_DSN=https://public-key@organization.ingest.us.sentry.io/project
+SENTRY_ENVIRONMENT=production
+SENTRY_RELEASE=tandoor-mcp@<git-sha>
+SENTRY_TRACES_SAMPLE_RATE=0.2
+```
+
+The deployment script supplies the release because the runtime image contains
+only the binary and no Git metadata. Blank DSNs disable the client.
+
+Each HTTP request receives an isolated Sentry hub and transaction. Existing
+`tracing` spans become Sentry spans, `error!` events become error issues, and
+warning/information events become breadcrumbs. Arguments are not attached to
+MCP tool spans because they may contain recipe text or signed URLs. Default
+PII collection is disabled.
+
+The Sentry guard outlives the Tokio runtime and flushes pending events during
+shutdown. The SDK uses rustls so the distroless runtime does not need OpenSSL.
+
+## New Relic tracing
 
 The server exports OpenTelemetry traces directly to New Relic over
 OTLP/HTTP-protobuf. Set a non-empty `NEW_RELIC_LICENSE_KEY` to enable it:
