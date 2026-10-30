@@ -122,7 +122,11 @@ services:
 
   web_recipes:
     restart: always
-    image: vabene1111/recipes:latest
+    # Pinned build of the deployed Recipes fork (ghcr.io/ralphzimmermann/recipes),
+    # not upstream's Docker Hub image, so tests exercise the code production
+    # runs. Keep in sync with TANDOOR_IMAGE in .github/workflows/ci.yml; bump
+    # the sha-<short> tag deliberately after the fork's master changes.
+    image: ${TANDOOR_IMAGE:-ghcr.io/ralphzimmermann/recipes:sha-6d753ba}
     env_file:
       - ./.env.dev
     volumes:

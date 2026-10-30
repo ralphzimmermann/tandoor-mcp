@@ -121,6 +121,16 @@ clean_volumes() {
 }
 
 start_services() {
+    # The Tandoor image is the deployed fork on GHCR. Pull it explicitly so a
+    # missing registry login fails with a hint instead of a bare compose error.
+    log_info "Pulling the pinned Tandoor image..."
+    if ! docker compose -f "$COMPOSE_FILE" pull --quiet web_recipes; then
+        log_error "Could not pull the Tandoor image (see docker-compose.yml web_recipes)."
+        log_error "If the GHCR package is private, log in first with a token that has read:packages:"
+        log_error "  gh auth refresh -s read:packages && gh auth token | docker login ghcr.io -u <github-user> --password-stdin"
+        return 1
+    fi
+
     log_info "Starting Docker services..."
     docker compose -f "$COMPOSE_FILE" up -d
     
