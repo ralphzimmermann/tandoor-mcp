@@ -51,7 +51,7 @@ jobs:
       # Pinned build of the deployed Recipes fork, published by that
       # repository's build-docker workflow. Keep in sync with web_recipes in
       # docker-compose.yml; bump the sha-<short> tag deliberately.
-      TANDOOR_IMAGE: ghcr.io/ralphzimmermann/recipes:sha-01642c5
+      TANDOOR_IMAGE: ghcr.io/ralphzimmermann/recipes:sha-6d753ba
 
     services:
       db:
