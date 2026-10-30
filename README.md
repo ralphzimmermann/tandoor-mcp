@@ -335,11 +335,11 @@ This happens when the connector URL points to a legacy SSE endpoint (`/sse`). Cl
 
 ### "Authentication credentials were not provided"
 
-The `Authorization: Bearer` header is missing or the token is invalid. Verify `TANDOOR_AUTH_TOKEN` is set and correct. The server checks the token against Tandoor at startup and exits with `Tandoor rejected TANDOOR_AUTH_TOKEN: 401 ...` rather than serving requests that would all fail.
+The `Authorization: Bearer` header is missing (401) or the token is unknown or expired (Tandoor answers 403 with this message). Verify `TANDOOR_AUTH_TOKEN` is set and correct. The server checks the token against Tandoor at startup and exits with `Tandoor rejected TANDOOR_AUTH_TOKEN: 403 ...` rather than serving requests that would all fail.
 
 ### "You do not have permission to perform this action"
 
-Tandoor permissions issue. Check that the user has an active `UserSpace` with an `admin` group assignment (see [Tandoor Configuration](#tandoor-configuration) above). Since the startup check requests `/api/keyword/`, a token whose user lacks space access stops the server at startup with a `403` in the log instead of starting with limited functionality.
+Tandoor permissions issue. Check that the user has an active `UserSpace` with an `admin` group assignment (see [Tandoor Configuration](#tandoor-configuration) above). Since the startup check requests `/api/keyword/`, a token whose user lacks space access stops the server at startup with this `403` in the log instead of starting with limited functionality.
 
 ### "Failed to connect to Tandoor API" at startup
 

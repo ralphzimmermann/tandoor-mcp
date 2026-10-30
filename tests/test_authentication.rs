@@ -43,10 +43,13 @@ async fn test_invalid_token_is_rejected_by_tandoor() {
         .expect_err("Tandoor should reject an invalid API token");
 
     // Distinguish an auth rejection from Tandoor simply being unreachable.
+    // Tandoor's OAuth2 layer answers an unknown Bearer token with 403
+    // ("Authentication credentials were not provided or access is
+    // forbidden"); a missing header yields 401.
     let message = error.to_string();
     assert!(
-        message.contains("401"),
-        "Expected an HTTP 401 from Tandoor, got: {message}"
+        message.contains("401") || message.contains("403"),
+        "Expected an HTTP 401/403 from Tandoor, got: {message}"
     );
 }
 

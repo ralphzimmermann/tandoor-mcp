@@ -37,8 +37,9 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
   test container.
 - Startup validation: before binding `BIND_ADDR`, the server sends
   `GET /api/keyword/?page_size=1` with the token and exits non-zero if Tandoor
-  is unreachable or answers anything other than 2xx (401 bad token, 403
-  missing space permission). The Compose service uses `restart:
+  is unreachable or answers anything other than 2xx (Tandoor returns 403
+  for both an unknown token and a missing space permission; 401 only when
+  the header is absent). The Compose service uses `restart:
   unless-stopped`, so on a cold host boot it restarts with Docker's back-off
   until Tandoor answers; expect a few "Failed to connect to Tandoor API" log
   lines in that window. CI covers both outcomes in the Docker Build job: an

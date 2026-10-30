@@ -254,6 +254,18 @@ jobs:
             && echo "{\"count\":0,\"next\":null,\"previous\":null,\"results\":[]}" \
               > /srv/api/keyword/index.html \
             && cd /srv && exec python -m http.server 8080'
+          # `docker run -d` returns before the stub listens; the MCP server
+          # probes immediately on start and exits if the stub is not up yet.
+          for i in $(seq 1 30); do
+            if docker exec tandoor-stub python -c \
+              'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/api/keyword/")' \
+              2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec tandoor-stub python -c \
+            'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/api/keyword/")'
           docker run -d --name mcp-tandoor-ci --network mcp-ci \
             -e TANDOOR_AUTH_TOKEN=ci-startup-token \
             -e TANDOOR_BASE_URL=http://tandoor-stub:8080 \
