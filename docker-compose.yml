@@ -13,8 +13,6 @@ services:
       # tunnel .env; production ChatGPT deployments should set the public URL.
       TANDOOR_BASE_URL: ${TANDOOR_BASE_URL:-http://web_recipes:80}
       TANDOOR_AUTH_TOKEN: ${TANDOOR_AUTH_TOKEN:-}
-      TANDOOR_USERNAME: ${TANDOOR_USERNAME:-admin}
-      TANDOOR_PASSWORD: ${TANDOOR_PASSWORD:-admin}
       BIND_ADDR: 0.0.0.0:3001
       # Keep rmcp's DNS-rebinding protection enabled while permitting the
       # tunnel sidecar to address this service by its Compose DNS name.

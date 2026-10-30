@@ -29,13 +29,12 @@ fn instrumented_client(client: Client) -> ClientWithMiddleware {
 ///
 /// ## Features
 ///
-/// - **OAuth2 Authentication**: Handles Tandoor's token-based authentication
+/// - **OAuth2 Authentication**: Uses a caller-provided Tandoor API token
 /// - **Recipe Management**: Search, create, retrieve, and manage recipes
 /// - **Shopping Lists**: Add items, manage lists, check off completed items
 /// - **Meal Planning**: Plan meals and add ingredients to shopping lists
 /// - **Food Search**: Find foods and ingredients in the database
 /// - **Import Support**: Import recipes from URLs
-/// - **Rate Limit Handling**: Works with Tandoor's authentication limits
 ///
 /// ## Example
 ///
@@ -45,11 +44,13 @@ fn instrumented_client(client: Client) -> ClientWithMiddleware {
 /// # async fn example() -> anyhow::Result<()> {
 /// let mut client = TandoorClient::new("http://localhost:8080".to_string());
 ///
-/// // Authenticate
-/// client.authenticate("username".to_string(), "password".to_string()).await?;
+/// // Tokens are created in Tandoor under Settings → API.
+/// client.set_token("tda_your_api_token".to_string());
 ///
 /// // Search recipes
-/// let recipes = client.search_recipes(Some("pasta"), Some(10)).await?;
+/// let recipes = client
+///     .search_recipes(Some("pasta"), Some(10), None, None, None, None, None)
+///     .await?;
 ///
 /// // Get recipe details  
 /// if let Some(recipe) = recipes.results.first() {
@@ -73,23 +74,13 @@ impl TandoorClient {
     pub fn new(base_url: String) -> Self {
         Self {
             client: instrumented_client(Client::new()),
-            auth: TandoorAuth::new(base_url.clone()),
+            auth: TandoorAuth::new(),
             base_url,
         }
     }
 
-    pub async fn authenticate(&mut self, username: String, password: String) -> Result<()> {
-        self.auth.authenticate(username, password).await
-    }
-
     pub fn is_authenticated(&self) -> bool {
         self.auth.is_authenticated()
-    }
-
-    pub fn get_token_preview(&self) -> Option<String> {
-        self.auth
-            .get_token()
-            .map(|t| format!("{}...", &t[..t.len().min(10)]))
     }
 
     pub fn set_token(&mut self, token: String) {
@@ -98,6 +89,25 @@ impl TandoorClient {
 
     pub fn get_token(&self) -> Option<&str> {
         self.auth.get_token()
+    }
+
+    /// Verify that the configured token is accepted by a lightweight API call.
+    pub async fn validate_api_access(&self) -> Result<()> {
+        let auth_header = self.get_auth_header()?;
+        let url = format!("{}/api/keyword/?page_size=1", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", auth_header)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to Tandoor API: {e}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Tandoor rejected TANDOOR_AUTH_TOKEN: {status} - {error_body}");
+        }
+        Ok(())
     }
 
     /// Browser-facing URL for a recipe in the configured Tandoor instance.
@@ -116,8 +126,8 @@ impl TandoorClient {
                 Ok(format!("Bearer {token}"))
             }
             None => {
-                tracing::warn!("Attempted to make authenticated request without valid token - server will handle re-authentication if credentials are available");
-                anyhow::bail!("Not authenticated - please verify credentials and re-authenticate")
+                tracing::warn!("Attempted to make an authenticated request without an API token");
+                anyhow::bail!("Not authenticated: set TANDOOR_AUTH_TOKEN")
             }
         }
     }

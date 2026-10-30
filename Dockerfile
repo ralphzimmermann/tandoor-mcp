@@ -1,6 +1,7 @@
 # Multi-stage build for mcp-tandoor server
-# Build stage
-FROM rust:1.89-slim-bookworm AS builder
+# Build stage. Public ECR mirrors the official Docker Library image and avoids
+# Docker Hub availability/rate-limit failures on the deployment hosts.
+FROM public.ecr.aws/docker/library/rust:1.89-slim-bookworm AS builder
 
 # Install system dependencies for building
 RUN apt-get update && apt-get install -y \
@@ -39,7 +40,6 @@ COPY --from=builder /app/target/release/mcp-tandoor /usr/local/bin/mcp-tandoor
 
 # Set environment variables with defaults
 ENV TANDOOR_BASE_URL=http://localhost:8080
-ENV TANDOOR_USERNAME=admin
 ENV BIND_ADDR=0.0.0.0:3001
 ENV RUST_LOG=info
 

@@ -25,13 +25,10 @@
 //!
 //! // Use the client directly
 //! let mut client = TandoorClient::new("http://localhost:8080".to_string());
+//! client.set_token("tda_your_api_token".to_string());
 //!
 //! // Or create an MCP server
-//! let server = TandoorMcpServer::new_with_credentials(
-//!     "http://localhost:8080".to_string(),
-//!     "username".to_string(),
-//!     "password".to_string()
-//! );
+//! let server = TandoorMcpServer::new("http://localhost:8080".to_string());
 //! ```
 
 pub mod client;

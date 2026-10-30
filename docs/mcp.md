@@ -29,16 +29,12 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
 ## Configuration
 
 - `TANDOOR_BASE_URL`: Tandoor URL; default `http://localhost:8080`.
-- `TANDOOR_USERNAME`: shared Tandoor account; default `admin`.
-- `TANDOOR_PASSWORD`: password for that account; default `admin`.
-- `TANDOOR_AUTH_TOKEN`: reusable Tandoor token supported by the server API.
-  Blank values are treated as unset so Compose can fall back to
-  username/password authentication. Tandoor 2.7 removed the
-  `/api-token-auth/` endpoint that the fallback uses, so against 2.7 or later a
-  token is required; create it in Tandoor under Settings → API. CI mints its
-  token the same way Tandoor did, as an `oauth2_provider.AccessToken` with a
-  `tda_` prefix and `read write app` scope, from the Django shell (see
-  `.github/workflows/ci.yml`).
+- `TANDOOR_AUTH_TOKEN`: required reusable Tandoor token. Create it under
+  Settings → API. Blank values are rejected. Tandoor 2.7.0 removed the
+  username/password `/api-token-auth/` endpoint (present through 2.6.15), so
+  username/password credentials are not supported. CI and the local test
+  script mint short-lived `oauth2_provider.AccessToken` rows directly in the
+  test container.
 - `BIND_ADDR`: listen address; default `127.0.0.1:3001`.
 - `MCP_ALLOWED_HOSTS`: comma-separated hosts accepted by the transport's
   DNS-rebinding protection; defaults to loopback hosts. The Compose deployment

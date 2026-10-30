@@ -43,10 +43,9 @@ distributed trace:
 MCP tool call -> Tandoor API request -> Django transaction -> PostgreSQL query
 ```
 
-The first iteration intentionally leaves S3 SDK operations, public image
-downloads, and the one-time `/api-token-auth/` login (used only without
-`TANDOOR_AUTH_TOKEN`) uninstrumented. Add those only if traces identify them
-as a meaningful source of latency.
+The first iteration intentionally leaves S3 SDK operations and public image
+downloads uninstrumented. Add those only if traces identify them as a
+meaningful source of latency.
 
 Every log line emitted inside a tool call carries the `mcp.tool_call{...}`
 span prefix, including the `otel.*` fields, so `docker logs` output is longer

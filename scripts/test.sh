@@ -19,7 +19,7 @@ TANDOOR_TEST_PORT="${TANDOOR_TEST_PORT:-8080}"
 # The Compose stack publishes Tandoor on the *Docker host*, which is only
 # localhost when the active Docker context is local. For an ssh:// or tcp://
 # context (a remote engine), derive the host from the context so the readiness
-# probe, token fetch, and tests reach the published port. Override with
+# probe and tests reach the published port. Override with
 # TANDOOR_TEST_HOST when the engine is reachable under a different name.
 detect_docker_host() {
     local endpoint host
@@ -211,20 +211,15 @@ run_tests() {
     
     # Set environment variables for the MCP server
     export TANDOOR_BASE_URL="${TANDOOR_TEST_URL}"
-    export TANDOOR_USERNAME="admin"
-    export TANDOOR_PASSWORD="testing1"
-    
-    # Try to get an auth token to avoid rate limiting (10 requests/day!)
-    log_info "Getting authentication token..."
-    TOKEN=$(bash ./scripts/get_token.sh "$TANDOOR_USERNAME" "$TANDOOR_PASSWORD" "$TANDOOR_BASE_URL" 2>/dev/null)
-    
-    if [ -n "$TOKEN" ]; then
-        export TANDOOR_AUTH_TOKEN="$TOKEN"
-        log_success "Got auth token, tests will reuse it"
-    else
-        log_warning "Could not get auth token - tests may fail due to rate limiting"
-        log_warning "Tandoor limits auth to 10 requests/day. Consider restarting Tandoor to reset."
+
+    log_info "Minting local integration-test API token..."
+    TOKEN=$(bash ./scripts/get_token.sh "$COMPOSE_FILE")
+    if [ -z "$TOKEN" ]; then
+        log_error "Could not mint TANDOOR_AUTH_TOKEN"
+        return 1
     fi
+    export TANDOOR_AUTH_TOKEN="$TOKEN"
+    log_success "API token configured for integration tests"
     
     # Run Rust tests
     if [ "$VERBOSE" = true ]; then
