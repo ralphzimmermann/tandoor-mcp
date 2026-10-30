@@ -208,7 +208,6 @@ def sentry_candidates(
             {
                 "query": query_text,
                 "environment": config.environment,
-                "statsPeriod": config.window,
                 "limit": 100,
             }
         )
