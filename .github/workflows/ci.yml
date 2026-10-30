@@ -43,6 +43,15 @@ jobs:
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    env:
+      # Pinned build of the deployed Recipes fork, published by that
+      # repository's build-docker workflow. Keep in sync with web_recipes in
+      # docker-compose.yml; bump the sha-<short> tag deliberately.
+      TANDOOR_IMAGE: ghcr.io/ralphzimmermann/recipes:sha-01642c5
 
     services:
       db:
@@ -72,6 +81,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev
 
+      # Required while the package is private; harmless once it is public.
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - name: Start Tandoor
         run: |
           docker run -d --name tandoor \
@@ -85,7 +102,7 @@ jobs:
             -e SECRET_KEY=ci-test-secret-key \
             -e TANDOOR_PORT=8080 \
             -e ALLOWED_HOSTS="*" \
-            vabene1111/recipes:latest
+            "$TANDOOR_IMAGE"
 
       - name: Wait for Tandoor to be ready
         run: |
