@@ -4,9 +4,9 @@
 //! process installs only the existing formatted-log subscriber and creates no
 //! exporter, background task, or outbound telemetry traffic.
 
-use std::{collections::HashMap, env};
+use std::{borrow::Cow, collections::HashMap, env};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use opentelemetry::{global, trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{
@@ -15,10 +15,89 @@ use opentelemetry_sdk::{
     trace::{span_processor_with_async_runtime::BatchSpanProcessor, Sampler, SdkTracerProvider},
     Resource,
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use sentry::integrations::tracing::{BreadcrumbLayer, ErrorLayer, SpanLayer};
+use tracing_subscriber::{
+    filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+};
 
 const DEFAULT_APP_NAME: &str = "tandoor-mcp";
 const DEFAULT_OTLP_ENDPOINT: &str = "https://otlp.nr-data.net:4318";
+
+/// Optional Sentry settings loaded before the Tokio runtime starts.
+#[derive(Debug, PartialEq)]
+pub struct SentryConfig {
+    dsn: Option<String>,
+    environment: Option<String>,
+    release: Option<String>,
+    traces_sample_rate: f32,
+}
+
+impl SentryConfig {
+    pub fn from_env() -> Result<Self> {
+        Self::from_values(
+            env::var("SENTRY_DSN").ok(),
+            env::var("SENTRY_ENVIRONMENT").ok(),
+            env::var("SENTRY_RELEASE").ok(),
+            env::var("SENTRY_TRACES_SAMPLE_RATE").ok(),
+        )
+    }
+
+    fn from_values(
+        dsn: Option<String>,
+        environment: Option<String>,
+        release: Option<String>,
+        traces_sample_rate: Option<String>,
+    ) -> Result<Self> {
+        let traces_sample_rate = non_empty(traces_sample_rate)
+            .map(|value| {
+                value
+                    .parse::<f32>()
+                    .context("SENTRY_TRACES_SAMPLE_RATE must be a number")
+            })
+            .transpose()?
+            .unwrap_or(1.0);
+        if !(0.0..=1.0).contains(&traces_sample_rate) {
+            bail!("SENTRY_TRACES_SAMPLE_RATE must be between 0 and 1");
+        }
+
+        Ok(Self {
+            dsn: non_empty(dsn),
+            environment: non_empty(environment),
+            release: non_empty(release),
+            traces_sample_rate,
+        })
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.dsn.is_some()
+    }
+}
+
+/// Initialize Sentry before Tokio starts so worker threads inherit the hub.
+///
+/// An absent DSN still returns a guard backed by a disabled client. Keeping one
+/// path avoids initializing the tracing subscriber differently by environment.
+pub fn init_sentry(config: SentryConfig) -> Result<sentry::ClientInitGuard> {
+    let release = config
+        .release
+        .map(Cow::Owned)
+        .or_else(|| sentry::release_name!());
+    let mut options = sentry::ClientOptions::new()
+        .maybe_release(release)
+        .traces_sample_rate(config.traces_sample_rate)
+        .send_default_pii(false);
+
+    if let Some(dsn) = config.dsn {
+        dsn.parse::<sentry::types::Dsn>()
+            .context("SENTRY_DSN is invalid")?;
+        options = options.dsn(&dsn);
+    }
+    if let Some(environment) = config.environment {
+        options = options.environment(environment);
+    }
+
+    Ok(sentry::init(options))
+}
 
 /// New Relic settings loaded from the process environment.
 pub struct TelemetryConfig {
@@ -70,6 +149,9 @@ pub fn init(config: Option<TelemetryConfig>) -> Result<Option<SdkTracerProvider>
         tracing_subscriber::registry()
             .with(filter)
             .with(tracing_subscriber::fmt::layer())
+            .with(SpanLayer::new().with_filter(LevelFilter::INFO))
+            .with(ErrorLayer::new().with_filter(LevelFilter::ERROR))
+            .with(BreadcrumbLayer::new().with_filter(LevelFilter::INFO))
             .init();
         return Ok(None);
     };
@@ -108,6 +190,9 @@ pub fn init(config: Option<TelemetryConfig>) -> Result<Option<SdkTracerProvider>
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
+        .with(SpanLayer::new().with_filter(LevelFilter::INFO))
+        .with(ErrorLayer::new().with_filter(LevelFilter::ERROR))
+        .with(BreadcrumbLayer::new().with_filter(LevelFilter::INFO))
         .init();
 
     Ok(Some(provider))
@@ -150,7 +235,37 @@ fn trace_endpoint(endpoint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{trace_endpoint, TelemetryConfig, DEFAULT_APP_NAME, DEFAULT_OTLP_ENDPOINT};
+    use super::{
+        trace_endpoint, SentryConfig, TelemetryConfig, DEFAULT_APP_NAME, DEFAULT_OTLP_ENDPOINT,
+    };
+
+    #[test]
+    fn blank_sentry_dsn_disables_sentry() {
+        let config = SentryConfig::from_values(Some("  ".to_owned()), None, None, None).unwrap();
+        assert!(!config.is_enabled());
+        assert_eq!(config.traces_sample_rate, 1.0);
+    }
+
+    #[test]
+    fn sentry_settings_are_trimmed_and_parsed() {
+        let config = SentryConfig::from_values(
+            Some(" https://key@example.test/1 ".to_owned()),
+            Some(" staging ".to_owned()),
+            Some(" tandoor-mcp@abc ".to_owned()),
+            Some(" 0.25 ".to_owned()),
+        )
+        .unwrap();
+        assert!(config.is_enabled());
+        assert_eq!(config.environment.as_deref(), Some("staging"));
+        assert_eq!(config.release.as_deref(), Some("tandoor-mcp@abc"));
+        assert_eq!(config.traces_sample_rate, 0.25);
+    }
+
+    #[test]
+    fn sentry_sample_rate_must_be_valid() {
+        assert!(SentryConfig::from_values(None, None, None, Some("abc".to_owned())).is_err());
+        assert!(SentryConfig::from_values(None, None, None, Some("1.1".to_owned())).is_err());
+    }
 
     #[test]
     fn absent_or_blank_key_disables_telemetry() {

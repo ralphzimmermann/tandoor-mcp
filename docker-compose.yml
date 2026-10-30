@@ -40,6 +40,11 @@ services:
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME:-tandoor-mcp}
       NEW_RELIC_OTLP_ENDPOINT: ${NEW_RELIC_OTLP_ENDPOINT:-https://otlp.nr-data.net:4318}
       NEW_RELIC_ENVIRONMENT_NAME: ${NEW_RELIC_ENVIRONMENT_NAME:-}
+      # Blank disables Sentry without creating an exporter or background work.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-1.0}
     expose:
       - "3001"
     networks:

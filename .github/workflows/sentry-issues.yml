@@ -1,0 +1,42 @@
+name: Repeated Sentry errors
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report matching errors without changing GitHub issues
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: sentry-issues-tandoor-mcp
+  cancel-in-progress: false
+
+jobs:
+  create-issues:
+    runs-on: ubuntu-latest
+    env:
+      SENTRY_API_TOKEN: ${{ secrets.SENTRY_API_TOKEN }}
+      SENTRY_ORG: virtuflight
+      SENTRY_PROJECTS: tandoor-mcp
+      SENTRY_ENVIRONMENT: production
+      SENTRY_MIN_EVENTS: "3"
+      SENTRY_WINDOW: 1h
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Create or reopen repeated-error tickets
+        shell: bash
+        run: |
+          args=()
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" \
+            && "${{ inputs.dry_run }}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          python3 scripts/sentry_github_issues.py "${args[@]}"

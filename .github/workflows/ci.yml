@@ -19,6 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Python unit tests
+        run: python3 -m unittest scripts/test_sentry_github_issues.py
+
       - name: Install Rust (stable)
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:

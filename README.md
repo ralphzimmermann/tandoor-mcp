@@ -192,6 +192,10 @@ curl -X GET http://your-tandoor-url/api/keyword/ \
 | `NEW_RELIC_APP_NAME`  | New Relic/OpenTelemetry service name                        | `tandoor-mcp`             |
 | `NEW_RELIC_OTLP_ENDPOINT` | New Relic OTLP/HTTP base endpoint                      | US endpoint              |
 | `NEW_RELIC_ENVIRONMENT_NAME` | Optional `deployment.environment.name` trace attribute | Unset                 |
+| `SENTRY_DSN`         | Enables Sentry errors and tracing when non-empty             | Disabled                 |
+| `SENTRY_ENVIRONMENT` | Sentry deployment tag (`staging` or `production`)            | Unset                    |
+| `SENTRY_RELEASE`     | Source version supplied by deployment tooling                | Crate version            |
+| `SENTRY_TRACES_SAMPLE_RATE` | Fraction of Sentry transactions to retain (`0`–`1`)  | `1.0`                    |
 | `RUST_LOG`           | Log level (`info`, `debug`, `trace`, …)                   | `info`                   |
 
 `TANDOOR_AUTH_TOKEN` is required. Create it in Tandoor under **Settings → API**.
@@ -199,8 +203,8 @@ Tandoor 2.7.0 removed the username/password `/api-token-auth/` endpoint (it is
 still present in Tandoor 2.6.15 and earlier), so this server no longer accepts
 username/password credentials.
 
-See [New Relic tracing](docs/telemetry.md) for the span model and production
-configuration.
+See [application telemetry](docs/telemetry.md) for the Sentry and New Relic
+span models and production configuration.
 
 The Compose deployment adds `mcp-tandoor` to `MCP_ALLOWED_HOSTS` so the tunnel
 sidecar can use the private service name without disabling host validation.
