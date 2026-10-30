@@ -25,6 +25,10 @@ print('LOCAL_TEST_TOKEN=' + token.token)
 ")
 
 TOKEN=$(printf '%s\n' "$OUTPUT" | sed -n 's/^LOCAL_TEST_TOKEN=//p' | tail -n 1)
-test -n "$TOKEN"
+if [ -z "$TOKEN" ]; then
+  echo "Token minting did not return a token. Django shell output:" >&2
+  printf '%s\n' "$OUTPUT" >&2
+  exit 1
+fi
 
 echo "$TOKEN"

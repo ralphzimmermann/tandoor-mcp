@@ -7,6 +7,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Deployment hosts build here and have seen Docker Hub availability and
+        # rate-limit failures, so default to the Public ECR mirror of the
+        # official image. CI and plain `docker build` keep the Dockerfile's
+        # Docker Hub default.
+        RUST_IMAGE: ${RUST_IMAGE:-public.ecr.aws/docker/library/rust:1.89-slim-bookworm}
     restart: unless-stopped
     environment:
       # Defaults keep the non-profile integration-test stack usable without a

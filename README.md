@@ -65,6 +65,12 @@ This starts the MCP server and the pinned official tunnel sidecar without
 publishing the MCP port. See [MCP transport and ChatGPT](docs/mcp.md) for the
 required variables, permissions, logs, and ChatGPT setup.
 
+The Compose build pulls the Rust build image from the Public ECR mirror of the
+official image because deployment hosts have hit Docker Hub failures; set
+`RUST_IMAGE` in `.env` to use another registry. Plain `docker build` and CI use
+the Dockerfile's Docker Hub default, since Public ECR throttles anonymous pulls
+from shared runner IPs.
+
 ## Adding to Claude as a Custom Connector
 
 1. In Claude settings, go to **Integrations → Custom connectors → Add custom connector**
@@ -329,11 +335,15 @@ This happens when the connector URL points to a legacy SSE endpoint (`/sse`). Cl
 
 ### "Authentication credentials were not provided"
 
-The `Authorization: Bearer` header is missing or the token is invalid. Verify `TANDOOR_AUTH_TOKEN` is set and correct.
+The `Authorization: Bearer` header is missing or the token is invalid. Verify `TANDOOR_AUTH_TOKEN` is set and correct. The server checks the token against Tandoor at startup and exits with `Tandoor rejected TANDOOR_AUTH_TOKEN: 401 ...` rather than serving requests that would all fail.
 
 ### "You do not have permission to perform this action"
 
-Tandoor permissions issue. Check that the user has an active `UserSpace` with an `admin` group assignment (see [Tandoor Configuration](#tandoor-configuration) above).
+Tandoor permissions issue. Check that the user has an active `UserSpace` with an `admin` group assignment (see [Tandoor Configuration](#tandoor-configuration) above). Since the startup check requests `/api/keyword/`, a token whose user lacks space access stops the server at startup with a `403` in the log instead of starting with limited functionality.
+
+### "Failed to connect to Tandoor API" at startup
+
+The server validates the token before it opens the MCP listener, so it exits when `TANDOOR_BASE_URL` is unreachable. In Docker Compose the `restart: unless-stopped` policy retries until Tandoor is up; otherwise fix the URL or start Tandoor first.
 
 ### Django Scopes Error
 
@@ -403,7 +413,7 @@ GitHub Actions runs on every push and pull request:
 | `unit-test`       | fmt, strict clippy, domain/API-shape/protocol tests (no Docker)       |
 | `integration-test`| spins up Postgres + Tandoor, creates a test user, runs all tests     |
 | `security`        | blocking `cargo audit` for known vulnerabilities                    |
-| `docker-build`    | builds the Docker image and verifies the MCP process starts          |
+| `docker-build`    | builds the image, checks it exits without Tandoor, then serves MCP against a stub |
 
 The `publish` workflow builds natively for `linux/amd64` and `linux/arm64`,
 combines the image manifests, and pushes to the repository's GHCR package on a

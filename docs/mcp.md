@@ -35,6 +35,15 @@ request `_meta`. A tool call also sends `Mcp-Name` with the tool name.
   username/password credentials are not supported. CI and the local test
   script mint short-lived `oauth2_provider.AccessToken` rows directly in the
   test container.
+- Startup validation: before binding `BIND_ADDR`, the server sends
+  `GET /api/keyword/?page_size=1` with the token and exits non-zero if Tandoor
+  is unreachable or answers anything other than 2xx (401 bad token, 403
+  missing space permission). The Compose service uses `restart:
+  unless-stopped`, so on a cold host boot it restarts with Docker's back-off
+  until Tandoor answers; expect a few "Failed to connect to Tandoor API" log
+  lines in that window. CI covers both outcomes in the Docker Build job: an
+  unreachable Tandoor must exit, and a static stub answering the probe must
+  let the listener come up.
 - `BIND_ADDR`: listen address; default `127.0.0.1:3001`.
 - `MCP_ALLOWED_HOSTS`: comma-separated hosts accepted by the transport's
   DNS-rebinding protection; defaults to loopback hosts. The Compose deployment

@@ -1,7 +1,12 @@
 # Multi-stage build for mcp-tandoor server
-# Build stage. Public ECR mirrors the official Docker Library image and avoids
-# Docker Hub availability/rate-limit failures on the deployment hosts.
-FROM public.ecr.aws/docker/library/rust:1.89-slim-bookworm AS builder
+#
+# Build stage. The default pulls the official image from Docker Hub, which is
+# what GitHub-hosted CI and local builds should use: Public ECR throttles
+# anonymous pulls per source IP, and shared runner IPs hit its 429 limit.
+# Deployment hosts that see Docker Hub failures override RUST_IMAGE with the
+# Public ECR mirror (see docker-compose.yml).
+ARG RUST_IMAGE=rust:1.89-slim-bookworm
+FROM ${RUST_IMAGE} AS builder
 
 # Install system dependencies for building
 RUN apt-get update && apt-get install -y \

@@ -37,11 +37,16 @@ async fn test_invalid_token_is_rejected_by_tandoor() {
 
     let mut client = mcp_tandoor::TandoorClient::new(base_url);
     client.set_token("tda_invalid_test_token".to_string());
-    let result = client.get_keywords().await;
+    let error = client
+        .get_keywords()
+        .await
+        .expect_err("Tandoor should reject an invalid API token");
 
+    // Distinguish an auth rejection from Tandoor simply being unreachable.
+    let message = error.to_string();
     assert!(
-        result.is_err(),
-        "Tandoor should reject an invalid API token"
+        message.contains("401"),
+        "Expected an HTTP 401 from Tandoor, got: {message}"
     );
 }
 

@@ -21,6 +21,11 @@ async fn test_mcp_server_initialization() {
         .await
         .expect("Should set token successfully");
 
-    // Simple test - just verify the server was created successfully
-    println!("MCP server initialized successfully");
+    // Exercise the same startup validation that main.rs runs before it opens
+    // the MCP listener, so the real Tandoor request path is covered.
+    server
+        .test_api_access()
+        .await
+        .expect("Tandoor should accept the configured API token");
+    println!("MCP server initialized and validated its token against Tandoor");
 }
