@@ -236,7 +236,11 @@ The tag is pinned in two places that must stay in sync: `TANDOOR_IMAGE` in
 `.github/workflows/ci.yml` and `web_recipes` in `docker-compose.yml`
 (`TANDOOR_IMAGE` overrides it locally). Bump the `sha-` tag deliberately after
 the fork's `master` changes; the fork workflow also publishes `master`,
-`latest`, and semver tags for ad-hoc use. While the GHCR package is private,
+`latest`, and semver tags for ad-hoc use. The fork's weekly
+`ghcr-retention.yml` keeps only the newest five `sha-`/branch-tagged versions
+and never deletes `master`, `latest`, or semver tags, so a `sha-` pin must be
+bumped before five more `master` pushes land; pin a semver tag for anything
+longer-lived. While the GHCR package is private,
 CI authenticates with `GITHUB_TOKEN` (the package must grant this repository
 access under its "Manage Actions access" setting) and developers log in once
 with a `read:packages` token; see the README's "Running Tests".
