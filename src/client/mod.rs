@@ -1,6 +1,6 @@
 //! # Tandoor HTTP Client
 //!
-//! This module provides a direct HTTP client for the Tandoor API, handling authentication,
+//! This module provides a direct HTTP client for the Tandoor API, handling API tokens,
 //! recipe management, shopping lists, and other Tandoor functionality.
 //!
 //! ## Modules
@@ -17,11 +17,13 @@
 //! # async fn example() -> anyhow::Result<()> {
 //! let mut client = TandoorClient::new("http://localhost:8080".to_string());
 //!
-//! // Authenticate with Tandoor
-//! client.authenticate("username".to_string(), "password".to_string()).await?;
+//! // Create a token in Tandoor under Settings → API.
+//! client.set_token("tda_your_api_token".to_string());
 //!
 //! // Search for recipes
-//! let recipes = client.search_recipes(Some("pasta"), Some(10)).await?;
+//! let recipes = client
+//!     .search_recipes(Some("pasta"), Some(10), None, None, None, None, None)
+//!     .await?;
 //! println!("Found {} recipes", recipes.count);
 //! # Ok(())
 //! # }

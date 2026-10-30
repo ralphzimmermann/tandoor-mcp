@@ -205,16 +205,6 @@ fn paginated_response_with_recipes() {
     assert_eq!(resp.results[1].name, "Soup");
 }
 
-// ── Auth token handling ───────────────────────────────────────────────────────
-
-#[test]
-fn auth_token_deserialization() {
-    let json = r#"{"token": "tda_00000000_0000_0000_0000_000000000000"}"#;
-    let token: mcp_tandoor::client::AuthToken =
-        serde_json::from_str(json).expect("should deserialize auth token");
-    assert_eq!(token.token, "tda_00000000_0000_0000_0000_000000000000");
-}
-
 #[test]
 fn tandoor_client_set_token_marks_authenticated() {
     let mut client = mcp_tandoor::TandoorClient::new("http://localhost:8080".to_string());

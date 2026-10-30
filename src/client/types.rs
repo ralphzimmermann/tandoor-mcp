@@ -82,26 +82,6 @@ impl RecipeOrId {
     }
 }
 
-/// OAuth2 authentication token response from Tandoor.
-///
-/// Contains the Bearer token used for authenticating subsequent API requests.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AuthToken {
-    /// The Bearer token string (format: `tda_xxxxxxxx_xxxx_xxxx_xxxx_xxxxxxxxxxxx`)
-    pub token: String,
-}
-
-/// Authentication request payload for obtaining tokens.
-///
-/// Used with the `/api-token-auth/` endpoint to exchange credentials for a Bearer token.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AuthRequest {
-    /// Tandoor username
-    pub username: String,
-    /// Tandoor password
-    pub password: String,
-}
-
 /// A complete recipe with all its components and metadata.
 ///
 /// Represents a recipe from the Tandoor API, including ingredients, cooking steps,

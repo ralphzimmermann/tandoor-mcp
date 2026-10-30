@@ -7,9 +7,7 @@
 //! ## Environment Variables
 //!
 //! - `TANDOOR_BASE_URL`: Tandoor server URL (default: http://localhost:8080)
-//! - `TANDOOR_AUTH_TOKEN`: Existing API token (preferred; avoids login throttling)
-//! - `TANDOOR_USERNAME`: Tandoor username for authentication (default: admin)  
-//! - `TANDOOR_PASSWORD`: Tandoor password for authentication (default: admin)
+//! - `TANDOOR_AUTH_TOKEN`: Tandoor API token (required; create under Settings → API)
 //! - `BIND_ADDR`: Address to bind the MCP server (default: 127.0.0.1:3001)
 //! - `MCP_ALLOWED_HOSTS`: Comma-separated hosts accepted by DNS-rebinding protection
 //! - `MCP_ALLOWED_ORIGINS`: Comma-separated browser origins allowed to call `/mcp`
@@ -42,10 +40,6 @@ async fn main() -> anyhow::Result<()> {
 
     let base_url =
         env::var("TANDOOR_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let username = env::var("TANDOOR_USERNAME").unwrap_or_else(|_| "admin".to_string());
-
-    let password = env::var("TANDOOR_PASSWORD").unwrap_or_else(|_| "admin".to_string());
-
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
     let allowed_hosts = env::var("MCP_ALLOWED_HOSTS")
         .unwrap_or_else(|_| "localhost,127.0.0.1,::1".to_string())
@@ -62,13 +56,15 @@ async fn main() -> anyhow::Result<()> {
         .map(str::to_owned)
         .collect();
 
-    // Test authentication and validate token
-    tracing::info!("Validating Tandoor credentials...");
-    let mut test_server = TandoorMcpServer::new_with_credentials(
-        base_url.clone(),
-        username.clone(),
-        password.clone(),
-    );
+    if env::var_os("TANDOOR_USERNAME").is_some() || env::var_os("TANDOOR_PASSWORD").is_some() {
+        tracing::warn!(
+            "TANDOOR_USERNAME and TANDOOR_PASSWORD are ignored; \
+             Tandoor 2.7 requires an API token"
+        );
+    }
+
+    tracing::info!("Configuring Tandoor API token...");
+    let mut test_server = TandoorMcpServer::new(base_url.clone());
 
     if let Some(config) = ThumbnailConfig::from_env()? {
         let resource_origin = config.resource_origin()?;
@@ -87,44 +83,21 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("S3_BUCKET is unset; inline recipe galleries are disabled");
     }
 
-    // Compose expands an unset optional variable to an empty string. Treat blank
-    // secrets as absent so username/password authentication remains available.
-    let configured_token = non_empty_secret(env::var("TANDOOR_AUTH_TOKEN").ok());
-    let authentication_result = if let Some(token) = configured_token {
-        tracing::info!("Using TANDOOR_AUTH_TOKEN");
-        test_server.set_global_auth_token(token).await
-    } else {
-        test_server
-            .authenticate(username.clone(), password.clone())
-            .await
-    };
+    // Compose expands an unset optional variable to an empty string, so reject
+    // blank values explicitly rather than accepting an unusable Bearer token.
+    let configured_token =
+        non_empty_secret(env::var("TANDOOR_AUTH_TOKEN").ok()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TANDOOR_AUTH_TOKEN is required; create a token in Tandoor under Settings → API"
+            )
+        })?;
+    tracing::info!("Using TANDOOR_AUTH_TOKEN");
+    test_server.set_global_auth_token(configured_token).await?;
 
-    if let Err(e) = authentication_result {
-        tracing::error!("Authentication failed: {}", e);
-        tracing::error!("Please verify:");
-        tracing::error!("  - TANDOOR_BASE_URL is correct: {}", base_url);
-        tracing::error!("  - TANDOOR_USERNAME is correct: {}", username);
-        tracing::error!("  - TANDOOR_PASSWORD is correct");
-        tracing::error!("  - Tandoor server is running and accessible");
-        tracing::error!("  - Check if you're being rate limited (wait before retrying)");
-        std::process::exit(1);
-    }
-
-    // Test that we can actually use the token to make an API call
+    // Fail before opening the MCP listener if Tandoor rejects the token.
     tracing::info!("Testing API access with token...");
-    match test_server.test_api_access().await {
-        Ok(_) => {
-            tracing::info!("API access test passed");
-        }
-        Err(e) => {
-            tracing::warn!("API access test failed: {}", e);
-            tracing::warn!("This may be due to Tandoor permission configuration.");
-            tracing::warn!("The server will continue, but some functionality may be limited.");
-            tracing::warn!(
-                "If you encounter issues, check Tandoor space permissions and user roles."
-            );
-        }
-    }
+    test_server.test_api_access().await?;
+    tracing::info!("API access test passed");
 
     tracing::info!("Successfully authenticated and validated API access with Tandoor");
 

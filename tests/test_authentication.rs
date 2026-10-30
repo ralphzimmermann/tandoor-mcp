@@ -12,7 +12,7 @@ async fn test_authentication_success() {
     let env = TestEnvironment::new().await;
     assert!(
         env.is_ok(),
-        "Should authenticate successfully with valid credentials"
+        "Should configure the client with a valid API token"
     );
 
     let env = env.unwrap();
@@ -28,7 +28,7 @@ async fn test_authentication_success() {
 
 #[tokio::test]
 #[serial]
-async fn test_authentication_failure() {
+async fn test_invalid_token_is_rejected_by_tandoor() {
     common::init_test_logging();
     DockerEnvironment::ensure_running().expect("Docker environment not running");
 
@@ -36,18 +36,20 @@ async fn test_authentication_failure() {
         std::env::var("TANDOOR_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
     let mut client = mcp_tandoor::TandoorClient::new(base_url);
-    let result = client
-        .authenticate("invalid_user".to_string(), "wrong_password".to_string())
-        .await;
+    client.set_token("tda_invalid_test_token".to_string());
+    let error = client
+        .get_keywords()
+        .await
+        .expect_err("Tandoor should reject an invalid API token");
 
-    assert!(result.is_err(), "Should fail with invalid credentials");
+    // Distinguish an auth rejection from Tandoor simply being unreachable.
+    // Tandoor's OAuth2 layer answers an unknown Bearer token with 403
+    // ("Authentication credentials were not provided or access is
+    // forbidden"); a missing header yields 401.
+    let message = error.to_string();
     assert!(
-        !client.is_authenticated(),
-        "Client should not be authenticated"
-    );
-    assert!(
-        client.get_token().is_none(),
-        "Should not have authentication token"
+        message.contains("401") || message.contains("403"),
+        "Expected an HTTP 401/403 from Tandoor, got: {message}"
     );
 }
 

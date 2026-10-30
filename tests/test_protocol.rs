@@ -17,11 +17,7 @@ async fn spawn_server() -> (Client, String, tokio::task::JoinHandle<()>) {
 async fn spawn_server_with_origins(
     allowed_origins: Vec<String>,
 ) -> (Client, String, tokio::task::JoinHandle<()>) {
-    let server = TandoorMcpServer::new_with_credentials(
-        "http://127.0.0.1:9".to_string(),
-        "protocol-test".to_string(),
-        "protocol-test".to_string(),
-    );
+    let server = TandoorMcpServer::new("http://127.0.0.1:9".to_string());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("test listener should bind");

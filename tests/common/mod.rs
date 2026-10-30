@@ -18,8 +18,6 @@ impl TestEnvironment {
     pub async fn new() -> Result<Self> {
         let base_url = std::env::var("TANDOOR_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:8080".to_string());
-        let username = std::env::var("TANDOOR_USERNAME").unwrap_or_else(|_| "admin".to_string());
-        let password = std::env::var("TANDOOR_PASSWORD").unwrap_or_else(|_| "testing1".to_string());
 
         let mut client = TandoorClient::new(base_url.clone());
 
@@ -30,38 +28,22 @@ impl TestEnvironment {
             return Ok(Self { client });
         }
 
-        // Try to get token from environment variable (if set by test script)
+        // Integration tests require the token minted by scripts/test.sh or CI.
         if let Ok(token) = std::env::var("TANDOOR_AUTH_TOKEN") {
+            anyhow::ensure!(
+                !token.trim().is_empty(),
+                "TANDOOR_AUTH_TOKEN is set but empty"
+            );
             println!("Using token from TANDOOR_AUTH_TOKEN environment variable");
             client.set_token(token.clone());
             let _ = SHARED_TOKEN.set(token);
             return Ok(Self { client });
         }
 
-        // Last resort: try to authenticate (may fail due to rate limiting)
-        println!("Warning: Attempting authentication. This may fail due to rate limiting (10 requests/day)!");
-        println!("Consider setting TANDOOR_AUTH_TOKEN environment variable with a valid token.");
-
-        match client
-            .authenticate(username.clone(), password.clone())
-            .await
-        {
-            Ok(_) => {
-                println!("Authentication successful - storing token for other tests");
-                if let Some(token) = client.get_token() {
-                    let _ = SHARED_TOKEN.set(token.to_string());
-                }
-                Ok(Self { client })
-            }
-            Err(e) => {
-                eprintln!("Authentication failed: {e}");
-                eprintln!("\nTo fix this:");
-                eprintln!("1. Wait for rate limit to reset (24 hours)");
-                eprintln!("2. Or get a token manually and set TANDOOR_AUTH_TOKEN");
-                eprintln!("3. Or restart Tandoor to reset rate limits");
-                Err(e)
-            }
-        }
+        anyhow::bail!(
+            "TANDOOR_AUTH_TOKEN is required for integration tests; \
+             run ./scripts/test.sh or provide a token created under Tandoor Settings → API"
+        )
     }
 }
 

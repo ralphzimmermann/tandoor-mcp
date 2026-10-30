@@ -244,19 +244,59 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The server validates TANDOOR_AUTH_TOKEN with a real Tandoor request
+      # before it opens the MCP listener, so an unreachable Tandoor must make
+      # the container exit non-zero instead of serving.
+      - name: Verify startup fails fast without Tandoor
+        run: |
+          set +e
+          timeout 60 docker run --rm \
+            -e TANDOOR_AUTH_TOKEN=ci-startup-token \
+            -e TANDOOR_BASE_URL=http://127.0.0.1:9 \
+            mcp-tandoor:ci > startup.log 2>&1
+          status=$?
+          set -e
+          cat startup.log
+          test "$status" -ne 0
+          grep -q "Failed to connect to Tandoor API" startup.log
+
+      # A static file server stands in for Tandoor: the startup probe only
+      # needs GET /api/keyword/ to answer 200, and the stub keeps this job
+      # independent of the full Tandoor + PostgreSQL stack.
       - name: Verify container starts and serves MCP
         run: |
-          docker run -d --name mcp-tandoor-ci \
+          docker network create mcp-ci
+          docker run -d --name tandoor-stub --network mcp-ci python:3-alpine sh -c '
+            mkdir -p /srv/api/keyword \
+            && echo "{\"count\":0,\"next\":null,\"previous\":null,\"results\":[]}" \
+              > /srv/api/keyword/index.html \
+            && cd /srv && exec python -m http.server 8080'
+          # `docker run -d` returns before the stub listens; the MCP server
+          # probes immediately on start and exits if the stub is not up yet.
+          for i in $(seq 1 30); do
+            if docker exec tandoor-stub python -c \
+              'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/api/keyword/")' \
+              2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec tandoor-stub python -c \
+            'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/api/keyword/")'
+          docker run -d --name mcp-tandoor-ci --network mcp-ci \
             -e TANDOOR_AUTH_TOKEN=ci-startup-token \
+            -e TANDOOR_BASE_URL=http://tandoor-stub:8080 \
             -p 3001:3001 mcp-tandoor:ci
           for i in $(seq 1 20); do
             status=$(curl -sS -o /dev/null -w '%{http_code}' \
               -X POST http://127.0.0.1:3001/mcp || true)
             if [ "$status" != "000" ]; then
-              docker logs mcp-tandoor-ci
+              docker logs mcp-tandoor-ci 2>&1 | tee mcp.log
+              grep -q "API access test passed" mcp.log
               exit 0
             fi
             sleep 1
           done
-          docker logs mcp-tandoor-ci
+          docker logs mcp-tandoor-ci 2>&1 || true
+          docker logs tandoor-stub 2>&1 || true
           exit 1

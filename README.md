@@ -27,14 +27,9 @@ cd tandoor-mcp
 2. **Configure environment variables**:
 
 ```bash
-# Preferred: use a pre-existing API token (avoids the 10-req/day login rate limit)
+# Create an API token in Tandoor under Settings → API.
 export TANDOOR_BASE_URL="http://localhost:8080"
 export TANDOOR_AUTH_TOKEN="tda_your_token_here"
-
-# Alternative: username/password (subject to Tandoor rate limiting)
-export TANDOOR_BASE_URL="http://localhost:8080"
-export TANDOOR_USERNAME="admin"
-export TANDOOR_PASSWORD="your-password"
 ```
 
 3. **Run the server**:
@@ -69,6 +64,12 @@ docker compose --profile chatgpt up -d tunnel-client
 This starts the MCP server and the pinned official tunnel sidecar without
 publishing the MCP port. See [MCP transport and ChatGPT](docs/mcp.md) for the
 required variables, permissions, logs, and ChatGPT setup.
+
+The Compose build pulls the Rust build image from the Public ECR mirror of the
+official image because deployment hosts have hit Docker Hub failures; set
+`RUST_IMAGE` in `.env` to use another registry. Plain `docker build` and CI use
+the Dockerfile's Docker Hub default, since Public ECR throttles anonymous pulls
+from shared runner IPs.
 
 ## Adding to Claude as a Custom Connector
 
@@ -164,12 +165,7 @@ user_space.groups.add(admin_group)
 ### Verification
 
 ```bash
-# Get an API token
-curl -X POST http://your-tandoor-url/api-token-auth/ \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"your-password"}'
-
-# Test API access
+# Test the token created under Tandoor Settings → API
 curl -X GET http://your-tandoor-url/api/keyword/ \
   -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
@@ -181,9 +177,7 @@ curl -X GET http://your-tandoor-url/api/keyword/ \
 | Variable             | Description                                               | Default                  |
 | -------------------- | --------------------------------------------------------- | ------------------------ |
 | `TANDOOR_BASE_URL`   | Full browser-accessible URL to your Tandoor instance      | `http://localhost:8080`  |
-| `TANDOOR_AUTH_TOKEN` | Pre-existing Tandoor API token (**preferred**)            | —                        |
-| `TANDOOR_USERNAME`   | Username (only used when `TANDOOR_AUTH_TOKEN` is not set) | `admin`                  |
-| `TANDOOR_PASSWORD`   | Password (only used when `TANDOOR_AUTH_TOKEN` is not set) | `admin`                  |
+| `TANDOOR_AUTH_TOKEN` | Tandoor API token (**required**)                          | —                        |
 | `BIND_ADDR`          | Address and port for the MCP server                       | `127.0.0.1:3001`         |
 | `MCP_ALLOWED_HOSTS`   | Hosts accepted by DNS-rebinding protection                | Loopback hosts           |
 | `MCP_ALLOWED_ORIGINS` | Exact browser origins allowed to call `/mcp`              | —                        |
@@ -200,7 +194,10 @@ curl -X GET http://your-tandoor-url/api/keyword/ \
 | `NEW_RELIC_ENVIRONMENT_NAME` | Optional `deployment.environment.name` trace attribute | Unset                 |
 | `RUST_LOG`           | Log level (`info`, `debug`, `trace`, …)                   | `info`                   |
 
-`TANDOOR_AUTH_TOKEN` is strongly preferred. Tandoor limits the `/api-token-auth/` login endpoint to **10 requests per day per IP**; a token bypasses this entirely.
+`TANDOOR_AUTH_TOKEN` is required. Create it in Tandoor under **Settings → API**.
+Tandoor 2.7.0 removed the username/password `/api-token-auth/` endpoint (it is
+still present in Tandoor 2.6.15 and earlier), so this server no longer accepts
+username/password credentials.
 
 See [New Relic tracing](docs/telemetry.md) for the span model and production
 configuration.
@@ -212,12 +209,9 @@ lifecycle, security, and local MinIO setup.
 
 ### Getting a Tandoor API token
 
-```bash
-curl -X POST http://your-tandoor/api-token-auth/ \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"your-password"}'
-# → {"token": "tda_..."}
-```
+Open your Tandoor instance, go to **Settings → API**, create an access token,
+and set its `tda_...` value as `TANDOOR_AUTH_TOKEN`. Treat the token as a
+password and choose an expiry appropriate for the deployment.
 
 ## Available Tools
 
@@ -341,15 +335,15 @@ This happens when the connector URL points to a legacy SSE endpoint (`/sse`). Cl
 
 ### "Authentication credentials were not provided"
 
-The `Authorization: Bearer` header is missing or the token is invalid. Verify `TANDOOR_AUTH_TOKEN` is set and correct.
+The `Authorization: Bearer` header is missing (401) or the token is unknown or expired (Tandoor answers 403 with this message). Verify `TANDOOR_AUTH_TOKEN` is set and correct. The server checks the token against Tandoor at startup and exits with `Tandoor rejected TANDOOR_AUTH_TOKEN: 403 ...` rather than serving requests that would all fail.
 
 ### "You do not have permission to perform this action"
 
-Tandoor permissions issue. Check that the user has an active `UserSpace` with an `admin` group assignment (see [Tandoor Configuration](#tandoor-configuration) above).
+Tandoor permissions issue. Check that the user has an active `UserSpace` with an `admin` group assignment (see [Tandoor Configuration](#tandoor-configuration) above). Since the startup check requests `/api/keyword/`, a token whose user lacks space access stops the server at startup with this `403` in the log instead of starting with limited functionality.
 
-### "Request was throttled" (429)
+### "Failed to connect to Tandoor API" at startup
 
-Tandoor limits authentication to 10 requests per day per IP. Switch to `TANDOOR_AUTH_TOKEN` to bypass it. If already throttled, wait until midnight UTC or restart Tandoor to reset the counter.
+The server validates the token before it opens the MCP listener, so it exits when `TANDOOR_BASE_URL` is unreachable. In Docker Compose the `restart: unless-stopped` policy retries until Tandoor is up; otherwise fix the URL or start Tandoor first.
 
 ### Django Scopes Error
 
@@ -426,7 +420,7 @@ GitHub Actions runs on every push and pull request:
 | `unit-test`       | fmt, strict clippy, domain/API-shape/protocol tests (no Docker)       |
 | `integration-test`| spins up Postgres + the pinned fork Tandoor image, creates a test user, runs all tests |
 | `security`        | blocking `cargo audit` for known vulnerabilities                    |
-| `docker-build`    | builds the Docker image and verifies the MCP process starts          |
+| `docker-build`    | builds the image, checks it exits without Tandoor, then serves MCP against a stub |
 
 The `publish` workflow builds natively for `linux/amd64` and `linux/arm64`,
 combines the image manifests, and pushes to the repository's GHCR package on a

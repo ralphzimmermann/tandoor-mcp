@@ -15,8 +15,7 @@
 //!
 //! ## Authentication
 //!
-//! The server supports both credential-based authentication and pre-set tokens
-//! to work around Tandoor's strict rate limiting (10 auth requests per day).
+//! The server requires an API token created in Tandoor under Settings → API.
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rmcp::{
@@ -2434,11 +2433,8 @@ pub struct GetUnitConversionsParams {
 }
 
 // Global shared authentication state
-/// Global authentication token storage to handle Tandoor's rate limiting
+/// API token shared by all server instances.
 static GLOBAL_AUTH: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
-
-/// Global credentials storage for automatic re-authentication
-static GLOBAL_CREDENTIALS: OnceLock<(String, String)> = OnceLock::new();
 
 /// # Tandoor MCP Server
 ///
@@ -2446,28 +2442,20 @@ static GLOBAL_CREDENTIALS: OnceLock<(String, String)> = OnceLock::new();
 /// standardized tools. This server handles all communication with Tandoor APIs
 /// and exposes them as MCP tools for AI assistants.
 ///
-/// ## Rate Limiting Considerations
-///
-/// Tandoor has aggressive rate limiting on authentication endpoints (10 requests/day).
-/// The server handles this by:
-/// - Storing authentication tokens globally
-/// - Reusing tokens across requests
-/// - Supporting pre-set tokens via environment variables
+/// Authentication uses a reusable Tandoor API token. Tandoor 2.7 removed the
+/// username/password token endpoint, so callers must create a token under
+/// Settings → API and provide it through `TANDOOR_AUTH_TOKEN`.
 ///
 /// ## Example Usage
 ///
 /// ```no_run
 /// use mcp_tandoor::server::TandoorMcpServer;
 ///
-/// // Create server with credentials
-/// let server = TandoorMcpServer::new_with_credentials(
-///     "http://localhost:8080".to_string(),
-///     "admin".to_string(),
-///     "password".to_string()
-/// );
-///
-/// // Or set a pre-authenticated token
-/// server.set_global_auth_token("your_token".to_string()).await.unwrap();
+/// # async fn example() -> anyhow::Result<()> {
+/// let server = TandoorMcpServer::new("http://localhost:8080".to_string());
+/// server.set_global_auth_token("your_token".to_string()).await?;
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone)]
 pub struct TandoorMcpServer {
@@ -2584,30 +2572,10 @@ fn meal_plan_gallery_tool_meta() -> MetaObject {
 
 #[tool_router]
 impl TandoorMcpServer {
-    /// Create a new Tandoor MCP server with just a base URL.
-    /// Authentication will need to be handled separately.
+    /// Create a new Tandoor MCP server.
+    ///
+    /// Call [`Self::set_global_auth_token`] before serving requests.
     pub fn new(base_url: String) -> Self {
-        Self {
-            client: Arc::new(Mutex::new(TandoorClient::new(base_url))),
-            tool_router: Self::tool_router(),
-            thumbnails: None,
-        }
-    }
-
-    /// Create a new Tandoor MCP server with credentials for automatic authentication.
-    ///
-    /// The credentials are stored globally and will be used for automatic re-authentication
-    /// when tokens expire. This is the recommended constructor for most use cases.
-    ///
-    /// # Arguments
-    ///
-    /// * `base_url` - The base URL of the Tandoor server (e.g., "http://localhost:8080")
-    /// * `username` - Tandoor username for authentication
-    /// * `password` - Tandoor password for authentication
-    pub fn new_with_credentials(base_url: String, username: String, password: String) -> Self {
-        // Store credentials globally so all instances can use them
-        let _ = GLOBAL_CREDENTIALS.set((username, password));
-
         Self {
             client: Arc::new(Mutex::new(TandoorClient::new(base_url))),
             tool_router: Self::tool_router(),
@@ -2663,11 +2631,7 @@ impl TandoorMcpServer {
         )
     }
 
-    /// Set a pre-authenticated token to avoid rate limiting.
-    ///
-    /// This is useful when you have a token from a previous authentication
-    /// or from an external source. Tandoor limits authentication to 10 requests
-    /// per day, so reusing tokens is important for reliability.
+    /// Set the Tandoor API token shared by all MCP requests.
     ///
     /// # Arguments
     ///
@@ -2680,26 +2644,8 @@ impl TandoorMcpServer {
         Ok(())
     }
 
-    pub async fn authenticate(
-        &self,
-        username: String,
-        password: String,
-    ) -> Result<(), anyhow::Error> {
-        let mut client = self.client.lock().await;
-        let result = client.authenticate(username, password).await;
-
-        if result.is_ok() {
-            // Store the token globally for all instances to use
-            if let Some(token) = client.get_token() {
-                self.set_global_auth_token(token.to_string()).await?;
-            }
-        }
-
-        result
-    }
-
     /// Returns an authenticated client snapshot. The mutex protects token
-    /// refresh only; network requests must not serialize behind it.
+    /// propagation only; network requests must not serialize behind it.
     async fn ensure_authenticated(&self) -> Result<TandoorClient, anyhow::Error> {
         tracing::info!("=== ensure_authenticated: acquiring client lock ===");
 
@@ -2723,63 +2669,23 @@ impl TandoorMcpServer {
             return Ok(client.clone());
         }
 
-        // Prefer a reusable token to avoid Tandoor's authentication rate limit.
         if let Some(auth_storage) = GLOBAL_AUTH.get() {
             if let Some(token) = auth_storage.lock().await.clone() {
                 client.set_token(token);
-                tracing::info!("Using pre-authenticated Tandoor token");
+                tracing::info!("Using configured Tandoor API token");
                 return Ok(client.clone());
             }
         }
 
-        tracing::info!("=== ensure_authenticated: not authenticated, proceeding with auth ===");
-
-        // If no global token, try to authenticate with stored credentials directly
-        if let Some((username, password)) = GLOBAL_CREDENTIALS.get() {
-            tracing::info!(
-                "Auto-authenticating with stored credentials for user: {}",
-                username
-            );
-            let result = client
-                .authenticate(username.clone(), password.clone())
-                .await;
-
-            match result {
-                Ok(_) => {
-                    tracing::info!("Authentication successful");
-                    if let Some(token) = client.get_token().map(str::to_owned) {
-                        let auth_storage = GLOBAL_AUTH.get_or_init(|| Arc::new(Mutex::new(None)));
-                        *auth_storage.lock().await = Some(token);
-                    }
-                    Ok(client.clone())
-                }
-                Err(e) => {
-                    tracing::error!("Authentication failed: {}", e);
-                    Err(e)
-                }
-            }
-        } else {
-            tracing::error!("No authentication credentials available");
-            Err(anyhow::anyhow!("No authentication credentials available"))
-        }
+        tracing::error!("TANDOOR_AUTH_TOKEN is not set");
+        Err(anyhow::anyhow!("TANDOOR_AUTH_TOKEN is not set"))
     }
 
     pub async fn test_api_access(&self) -> Result<(), anyhow::Error> {
-        // Just check if we can authenticate - don't make actual API calls during startup
-        // to avoid holding locks during network I/O
         let client = self.ensure_authenticated().await?;
-
-        // Check if we have a token
-        if client.is_authenticated() {
-            if let Some(preview) = client.get_token_preview() {
-                tracing::info!("Authentication test successful - have token: {}", preview);
-            }
-            Ok(())
-        } else {
-            tracing::error!("Authentication test failed - no token available");
-            Err(anyhow::anyhow!("No authentication token available"))
-        }
-        // Lock is automatically released here when client goes out of scope
+        client.validate_api_access().await?;
+        tracing::info!("Tandoor API accepted the configured token");
+        Ok(())
     }
 
     // Recipe tools
