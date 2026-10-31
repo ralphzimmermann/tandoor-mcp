@@ -4,7 +4,7 @@
 //! `from_date`/`to_date`, slim shopping-list foods) so serde stays compatible.
 
 use mcp_tandoor::client::types::{
-    ApiNamedReference, CreateMealPlanRequest, MealPlan, PaginatedResponse, Recipe,
+    ApiNamedReference, CookLog, CreateMealPlanRequest, MealPlan, PaginatedResponse, Recipe,
     ShoppingListEntry, Step,
 };
 
@@ -230,4 +230,89 @@ fn meal_plan_create_serializes_nested_references() {
     );
     assert!(serialized.get("title").is_none());
     assert!(serialized.get("note").is_none());
+}
+
+/// Tandoor's `CookLogSerializer` emits `recipe` as a bare id and nullable
+/// `servings`/`rating`. `get_cook_log` failed on every call while `CookLog`
+/// expected a nested recipe object and a non-null `servings` (TANDOOR-MCP-3).
+#[test]
+fn cook_log_accepts_recipe_id_and_nullable_fields() {
+    let json = r#"{
+      "count": 2,
+      "next": null,
+      "previous": null,
+      "timestamp": "2026-10-31T09:00:00.000000+01:00",
+      "results": [{
+        "id": 7,
+        "recipe": 1647,
+        "servings": 2,
+        "rating": 5,
+        "comment": "Great",
+        "comment_markdown": "<p>Great</p>",
+        "media": [],
+        "created_by": {"id": 1, "username": "cook", "display_name": "Cook"},
+        "created_at": "2026-10-20T18:00:00+02:00",
+        "updated_at": "2026-10-20T18:00:00+02:00"
+      }, {
+        "id": 8,
+        "recipe": 1647,
+        "servings": null,
+        "rating": null,
+        "comment": null,
+        "comment_markdown": "",
+        "media": [],
+        "created_by": {"id": 1, "username": "cook", "display_name": "Cook"},
+        "created_at": "2026-10-22T18:00:00+02:00",
+        "updated_at": "2026-10-22T18:00:00+02:00"
+      }]
+    }"#;
+
+    let parsed: PaginatedResponse<CookLog> = serde_json::from_str(json).expect("cook log list");
+    assert_eq!(parsed.results.len(), 2);
+    assert_eq!(parsed.results[0].recipe.id(), 1647);
+    assert_eq!(parsed.results[0].recipe.name(), None);
+    assert_eq!(parsed.results[0].servings, Some(2));
+    assert_eq!(parsed.results[1].servings, None);
+    assert_eq!(parsed.results[1].rating, None);
+}
+
+#[test]
+fn cook_log_still_accepts_nested_recipe_summary() {
+    let json = r#"{
+      "id": 9,
+      "recipe": {"id": 12, "name": "Soup", "description": null, "image": null},
+      "servings": 1,
+      "rating": 4,
+      "comment": null,
+      "created_at": "2026-10-20T18:00:00Z",
+      "created_by": 1
+    }"#;
+
+    let parsed: CookLog = serde_json::from_str(json).expect("cook log entry");
+    assert_eq!(parsed.recipe.id(), 12);
+    assert_eq!(parsed.recipe.name(), Some("Soup"));
+}
+
+/// Tandoor ignores date filters on `/api/cook-log/` and orders by primary key
+/// ascending, so the client applies `days_back` itself and returns newest first.
+#[test]
+fn cook_log_recent_first_filters_and_sorts_locally() {
+    let entry = |id: i32, created_at: &str| -> CookLog {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "recipe": 1,
+            "created_at": created_at,
+        }))
+        .expect("cook log entry")
+    };
+    let entries = vec![
+        entry(1, "2026-09-01T12:00:00Z"),
+        entry(2, "2026-10-20T12:00:00Z"),
+        entry(3, "2026-10-25T12:00:00Z"),
+    ];
+    let from = "2026-10-01T00:00:00Z".parse().expect("valid date");
+
+    let recent = CookLog::recent_first(entries, Some(from));
+    let ids: Vec<i32> = recent.iter().map(|e| e.id).collect();
+    assert_eq!(ids, vec![3, 2]);
 }
