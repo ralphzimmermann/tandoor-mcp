@@ -262,8 +262,19 @@ accept both shapes:
   meal-type IDs and send nested objects containing both fields, such as
   `{"id": 1284, "name": "Buckwheat Porridge GF"}`, as required by Tandoor's
   writable nested serializers.
-- Nested recipe payloads on meal plans / cook logs are summaries, not full
-  recipe detail documents.
+- Nested recipe payloads on meal plans are summaries, not full recipe detail
+  documents.
+- Cook-log entries carry `recipe` as a bare id (`CookLogSerializer` uses the
+  default primary-key field) with nullable `servings` and `rating`. Typing it
+  as a nested summary made every `get_cook_log` call fail (TANDOOR-MCP-3);
+  `CookLog.recipe` is now `RecipeOrId` and the server resolves names with one
+  `get_recipe` call per distinct recipe. `/api/cook-log/` also ignores date
+  parameters and orders by primary key ascending, so the client reads all
+  pages at `page_size=200` and applies `days_back` locally, newest first.
+- Paginated list decoding reads the body as text and runs serde on it so a
+  shape mismatch reports the offending field; `reqwest`'s `response.json()`
+  only says "error decoding response body", which is what made the cook-log
+  failure hard to diagnose from Sentry.
 - Shopping entries embed a slim food object and may omit creator/timestamp
   fields.
 - Recipe ingredients may have no food when they represent a section header.

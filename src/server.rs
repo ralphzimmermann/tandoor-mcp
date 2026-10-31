@@ -1317,6 +1317,55 @@ fn tool_err(error: &str, details: impl std::fmt::Display) -> Result<CallToolResu
     )]))
 }
 
+/// Resolve recipe names for cook-log entries.
+///
+/// Tandoor serializes a cook log's `recipe` as a bare id, so names are looked up
+/// once per distinct recipe. A failed lookup is logged and leaves that recipe
+/// unnamed rather than failing the whole tool call.
+async fn cook_log_recipe_names(
+    client: &TandoorClient,
+    entries: &[crate::client::types::CookLog],
+) -> std::collections::HashMap<i32, String> {
+    let mut names = std::collections::HashMap::new();
+    for entry in entries {
+        let id = entry.recipe.id();
+        if names.contains_key(&id) {
+            continue;
+        }
+        if let Some(name) = entry.recipe.name() {
+            names.insert(id, name.to_string());
+            continue;
+        }
+        match client.get_recipe(id).await {
+            Ok(recipe) => {
+                names.insert(id, recipe.name);
+            }
+            Err(e) => tracing::warn!("Could not resolve recipe {id} for cook log: {e:#}"),
+        }
+    }
+    names
+}
+
+/// Tool view of one cook-log entry; `recipe_name` is `null` when unresolved.
+fn cook_log_view(
+    client: &TandoorClient,
+    log: &crate::client::types::CookLog,
+    recipe_name: Option<&String>,
+) -> serde_json::Value {
+    let recipe_id = log.recipe.id();
+    json!({
+        "id": log.id,
+        "recipe_id": recipe_id,
+        "recipe_name": recipe_name,
+        "recipe_url": client.recipe_url(recipe_id),
+        "servings": log.servings,
+        "rating": log.rating,
+        "comment": log.comment,
+        "created": log.created,
+        "date_cooked": log.created.format("%Y-%m-%d").to_string()
+    })
+}
+
 /// Keyword names in display order, with "source" keywords first.
 ///
 /// This kitchen marks the origin of a recipe (cookbook, website, person) with a
@@ -5166,28 +5215,16 @@ impl TandoorMcpServer {
             .get_cook_log(params.recipe_id, Some(params.days_back))
             .await
         {
-            Ok(response) => {
-                let cook_log_json: Vec<serde_json::Value> = response
-                    .results
-                    .into_iter()
-                    .map(|log| {
-                        json!({
-                            "id": log.id,
-                            "recipe_id": log.recipe.id,
-                            "recipe_name": log.recipe.name,
-                            "recipe_url": client.recipe_url(log.recipe.id),
-                            "servings": log.servings,
-                            "rating": log.rating,
-                            "comment": log.comment,
-                            "created": log.created,
-                            "date_cooked": log.created.format("%Y-%m-%d").to_string()
-                        })
-                    })
+            Ok(entries) => {
+                let names = cook_log_recipe_names(&client, &entries).await;
+                let cook_log_json: Vec<serde_json::Value> = entries
+                    .iter()
+                    .map(|log| cook_log_view(&client, log, names.get(&log.recipe.id())))
                     .collect();
 
                 let result = json!({
                     "cook_log": cook_log_json,
-                    "total_count": response.count,
+                    "total_count": entries.len(),
                     "days_back": params.days_back,
                     "recipe_filter": params.recipe_id
                 });
@@ -5246,18 +5283,11 @@ impl TandoorMcpServer {
 
         match client.log_cooked_recipe(request).await {
             Ok(cook_log) => {
-                let result = json!({
-                    "id": cook_log.id,
-                    "recipe_id": cook_log.recipe.id,
-                    "recipe_name": cook_log.recipe.name,
-                    "recipe_url": client.recipe_url(cook_log.recipe.id),
-                    "servings": cook_log.servings,
-                    "rating": cook_log.rating,
-                    "comment": cook_log.comment,
-                    "created": cook_log.created,
-                    "success": true,
-                    "message": "Recipe cooking logged successfully"
-                });
+                let names = cook_log_recipe_names(&client, std::slice::from_ref(&cook_log)).await;
+                let mut result =
+                    cook_log_view(&client, &cook_log, names.get(&cook_log.recipe.id()));
+                result["success"] = json!(true);
+                result["message"] = json!("Recipe cooking logged successfully");
 
                 Ok(CallToolResult::success(vec![Content::text(
                     serde_json::to_string_pretty(&result).unwrap(),

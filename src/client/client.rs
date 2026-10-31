@@ -13,6 +13,8 @@ use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 const MAX_PAGINATION_PAGES: usize = 100;
+/// Tandoor's `DefaultPagination.max_page_size`; larger values are clamped.
+const COOK_LOG_PAGE_SIZE: usize = 200;
 const MAX_EMBEDDED_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_RECIPE_IMAGE_REDIRECTS: usize = 3;
 
@@ -178,7 +180,14 @@ impl TandoorClient {
             let error_body = response.text().await.unwrap_or_default();
             anyhow::bail!("Failed to list {resource}: {status} - {error_body}");
         }
-        Ok(response.json().await?)
+        // Decode from text rather than `response.json()`: reqwest reports any
+        // serde failure only as "error decoding response body", which hides
+        // the offending field. The serde error names the field and position.
+        let body = response
+            .text()
+            .await
+            .with_context(|| format!("Failed to read {resource} response body"))?;
+        serde_json::from_str(&body).with_context(|| format!("Invalid {resource} response format"))
     }
 
     /// Fetch every page of a typed Django REST Framework collection.
@@ -1402,28 +1411,28 @@ impl TandoorClient {
     }
 
     // Cook log operations
+
+    /// List cook-log entries, optionally for one recipe, newest first.
+    ///
+    /// Tandoor's `/api/cook-log/` only supports the `recipe` filter: it orders by
+    /// primary key ascending and silently ignores date parameters such as
+    /// `from_date`. Reading only the first page would therefore return the
+    /// *oldest* entries, so every page is read at the maximum page size and
+    /// `days_back` is applied locally (see [`CookLog::recent_first`]).
     pub async fn get_cook_log(
         &self,
         recipe_id: Option<i32>,
         days_back: Option<i32>,
-    ) -> Result<PaginatedResponse<CookLog>> {
-        let auth_header = self.get_auth_header()?;
-        let mut url = format!("{}/api/cook-log/", self.base_url);
-
-        let mut params = vec![];
+    ) -> Result<Vec<CookLog>> {
+        let mut url = format!(
+            "{}/api/cook-log/?page_size={COOK_LOG_PAGE_SIZE}",
+            self.base_url
+        );
         if let Some(recipe) = recipe_id {
-            params.push(format!("recipe={recipe}"));
+            url.push_str(&format!("&recipe={recipe}"));
         }
-        if let Some(days) = days_back {
-            // Calculate from_date based on days_back
-            let from_date = chrono::Utc::now() - chrono::Duration::days(days as i64);
-            params.push(format!("from_date={}", from_date.format("%Y-%m-%d")));
-        }
-
-        if !params.is_empty() {
-            url.push('?');
-            url.push_str(&params.join("&"));
-        }
+        let from_date =
+            days_back.map(|days| chrono::Utc::now() - chrono::Duration::days(days as i64));
 
         tracing::debug!(
             "Getting cook log for recipe_id: {:?}, days_back: {:?}",
@@ -1431,40 +1440,18 @@ impl TandoorClient {
             days_back
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
+        let page = self
+            .get_all_paginated::<CookLog>(url, "cook log")
             .await
             .map_err(|e| {
-                tracing::error!("Network error getting cook log: {}", e);
-                anyhow::anyhow!("Failed to connect to Tandoor API: {e}")
+                // `{:#}` includes the cause chain so a decode failure names the field.
+                tracing::error!("Failed to get cook log: {e:#}");
+                e
             })?;
 
-        let status = response.status();
-        tracing::trace!("Cook log response status: {}", status);
-
-        if !status.is_success() {
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read error response".to_string());
-            tracing::error!(
-                "Failed to get cook log with status {}: {}",
-                status,
-                error_body
-            );
-            anyhow::bail!("Failed to get cook log: {status} - {error_body}");
-        }
-
-        let cook_log: PaginatedResponse<CookLog> = response.json().await.map_err(|e| {
-            tracing::error!("Failed to parse cook log response: {}", e);
-            anyhow::anyhow!("Invalid response format: {e}")
-        })?;
-
-        tracing::debug!("Successfully retrieved {} cook log entries", cook_log.count);
-        Ok(cook_log)
+        let entries = CookLog::recent_first(page.results, from_date);
+        tracing::debug!("Retrieved {} matching cook log entries", entries.len());
+        Ok(entries)
     }
 
     pub async fn log_cooked_recipe(&self, request: CreateCookLogRequest) -> Result<CookLog> {
@@ -1479,12 +1466,17 @@ impl TandoorClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            anyhow::bail!("Failed to log cooked recipe: {}", response.status());
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to log cooked recipe: {status} - {error_body}");
         }
 
-        let cook_log = response.json().await?;
-        Ok(cook_log)
+        let body = response
+            .text()
+            .await
+            .context("Failed to read cook log response body")?;
+        serde_json::from_str(&body).context("Invalid cook log response format")
     }
 
     // Utility operations

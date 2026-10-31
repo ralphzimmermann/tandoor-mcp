@@ -568,16 +568,41 @@ pub struct MealType {
     pub time: Option<String>,
 }
 
+/// One `/api/cook-log/` entry.
+///
+/// Tandoor's `CookLogSerializer` emits `recipe` as a bare foreign-key id (the
+/// default DRF primary-key field), not a nested summary, so callers that need
+/// the recipe name must resolve it separately. `RecipeOrId` keeps a nested
+/// summary working should the serializer ever expand it. `servings` and
+/// `rating` are nullable in the Tandoor model.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CookLog {
     pub id: i32,
-    pub recipe: RecipeSummary,
-    pub servings: f64,
+    pub recipe: RecipeOrId,
+    #[serde(default)]
+    pub servings: Option<i32>,
+    #[serde(default)]
     pub rating: Option<i32>,
+    #[serde(default)]
     pub comment: Option<String>,
     #[serde(rename = "created_at", alias = "created")]
     pub created: DateTime<Utc>,
-    pub created_by: UserOrId,
+    #[serde(default)]
+    pub created_by: Option<UserOrId>,
+}
+
+impl CookLog {
+    /// Keep entries created on or after `from`, newest first.
+    ///
+    /// Tandoor ignores date query parameters on `/api/cook-log/` and orders by
+    /// primary key ascending, so the "last N days" view has to be built here.
+    pub fn recent_first(mut entries: Vec<CookLog>, from: Option<DateTime<Utc>>) -> Vec<CookLog> {
+        if let Some(from) = from {
+            entries.retain(|entry| entry.created >= from);
+        }
+        entries.sort_by(|a, b| b.created.cmp(&a.created));
+        entries
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
