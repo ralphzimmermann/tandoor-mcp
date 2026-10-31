@@ -600,7 +600,7 @@ impl CookLog {
         if let Some(from) = from {
             entries.retain(|entry| entry.created >= from);
         }
-        entries.sort_by(|a, b| b.created.cmp(&a.created));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.created));
         entries
     }
 }
